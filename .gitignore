@@ -1,0 +1,11 @@
+.DS_Store
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+.venv/
+venv/
+
+# Persisted identity registries contain biometric embeddings — never commit them.
+*registry*.json
+identities.json
