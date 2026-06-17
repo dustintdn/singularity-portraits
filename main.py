@@ -67,7 +67,7 @@ def parse_args(argv=None):
     p.add_argument("--threshold", type=float, default=0.6, help="Identity match distance.")
     p.add_argument("--headless", action="store_true", help="Render without a window.")
     p.add_argument("--side-by-side", action="store_true", help="Show visualizer and camera feed side by side.")
-    p.add_argument("--style", choices=["classic", "vortex"], default="classic", help="Visual style.")
+    p.add_argument("--style", choices=["classic", "vortex", "flame"], default="classic", help="Visual style.")
     p.add_argument("--max-frames", type=int, help="Stop after N frames.")
     p.add_argument("--record", help="Write output to this MP4 path.")
     p.add_argument(

@@ -35,7 +35,7 @@ def _import_pygame(headless: bool):
     return pygame
 
 
-STYLES = ("classic", "vortex")
+STYLES = ("classic", "vortex", "flame")
 
 
 class SingularityRenderer:
@@ -89,6 +89,8 @@ class SingularityRenderer:
 
         if self.style == "vortex":
             self._draw_vortex(track, params, t)
+        elif self.style == "flame":
+            self._draw_flame(track, params, t)
         else:
             self._draw_classic(track, params, t)
 
@@ -281,7 +283,7 @@ class SingularityRenderer:
         self, cx, cy, radius, rotation, params, t, presence, seed_offset
     ):
         num_arms = 3 + (params.seed % 4)
-        arm_length = radius * 3.5
+        arm_length = radius * 1.5
         for arm in range(num_arms):
             base_angle = rotation + (2 * math.pi * arm / num_arms)
             color = params.palette[arm % len(params.palette)]
@@ -325,7 +327,7 @@ class SingularityRenderer:
     ):
         for i, color in enumerate(reversed(params.palette)):
             layer = len(params.palette) - 1 - i
-            layer_radius = radius * (0.5 + layer * 0.3)
+            layer_radius = radius * (1.0 + layer * 0.5)
             glow = self._glow(color, layer_radius, presence)
             rect = glow.get_rect(center=(int(cx), int(cy)))
             self.canvas.blit(glow, rect, special_flags=self.pygame.BLEND_RGB_ADD)
@@ -341,7 +343,56 @@ class SingularityRenderer:
                 deform += (0.3 / octave) * math.sin(
                     freq * ang + t * (5.0 + octave * 1.5) + seed_offset
                 )
-            r = radius * 0.4 * deform
+            r = radius * 0.7 * deform
+            points.append((cx + r * math.cos(ang), cy + r * math.sin(ang)))
+
+        if presence >= 1.0:
+            self.pygame.draw.polygon(self.canvas, core_color, points)
+        else:
+            tmp = self.pygame.Surface((self.width, self.height))
+            tmp.fill((0, 0, 0))
+            self.pygame.draw.polygon(tmp, core_color, points)
+            tmp.set_alpha(int(255 * presence))
+            self.canvas.blit(tmp, (0, 0), special_flags=self.pygame.BLEND_RGB_ADD)
+
+    # -- flame style ----------------------------------------------------------
+
+    def _draw_flame(self, track: Track, params: VisualParams, t: float) -> None:
+        cx = track.position.pos[0]
+        cy = track.position.pos[1]
+        cx, cy = self._apply_motion(cx, cy, params, t)
+
+        pulse = 1.0 + params.pulse_depth * math.sin(t * params.pulse_speed)
+        radius = params.base_radius * pulse * (0.4 + 0.6 * track.presence)
+        rotation = t * params.rotation_speed
+        seed_offset = params.seed % 1000
+
+        # Glow layers with increasing upward offset — outer layers drift higher
+        for i, color in enumerate(reversed(params.palette)):
+            layer = len(params.palette) - 1 - i
+            layer_radius = radius * (1.0 + layer * 0.55)
+            drift = layer * radius * 0.3 + math.sin(t * 2.0 + layer) * radius * 0.08
+            glow = self._glow(color, layer_radius, track.presence)
+            rect = glow.get_rect(center=(int(cx), int(cy - drift)))
+            self.canvas.blit(glow, rect, special_flags=self.pygame.BLEND_RGB_ADD)
+
+        self._draw_flame_core(cx, cy, radius, rotation, params, t, track.presence, seed_offset)
+
+    def _draw_flame_core(self, cx, cy, radius, rotation, params, t, presence, seed_offset):
+        n_points = 36
+        core_color = params.palette[0]
+        points = []
+        for i in range(n_points):
+            ang = rotation + 2 * math.pi * i / n_points
+            deform = 1.0
+            for octave in range(1, params.noise_octaves + 1):
+                deform += (params.noise_amplitude / octave) * math.sin(
+                    octave * (ang * (1 + params.angularity * 3) + params.seed % 7)
+                )
+            upward = max(0.0, -math.sin(ang))
+            stretch = 1.0 + upward * (0.6 + 0.3 * math.sin(t * 4.0 + seed_offset))
+            flicker = 1.0 + upward * 0.2 * math.sin(t * 9.0 + i * 0.8)
+            r = radius * 0.55 * deform * stretch * flicker
             points.append((cx + r * math.cos(ang), cy + r * math.sin(ang)))
 
         if presence >= 1.0:
