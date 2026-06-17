@@ -49,6 +49,8 @@ These two artifacts are committed so you can see what it does at a glance:
 
 ![gallery of singularities](assets/gallery.png)
 
+![walkthrough](assets/walkthrough.gif)
+
 ---
 
 ## Setup
