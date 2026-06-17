@@ -56,6 +56,7 @@ class SingularityRenderer:
         self.background = background
         self.side_by_side = side_by_side
         self.style = style
+        self.show_boxes = True
 
         self.pygame = _import_pygame(headless)
         self.pygame.init()
@@ -121,7 +122,7 @@ class SingularityRenderer:
         y = (box_h - fit_h) // 2
         return scaled, x, y
 
-    def present(self, camera_frame: np.ndarray | None = None) -> None:
+    def present(self, camera_frame: np.ndarray | None = None, face_boxes: list | None = None) -> None:
         """Push the canvas to the window (no-op semantics in headless mode)."""
 
         if self.screen is not None:
@@ -135,6 +136,17 @@ class SingularityRenderer:
                     np.transpose(camera_frame, (1, 0, 2))
                 )
                 cam_surf = self.pygame.transform.flip(cam_surf, True, False)
+                if face_boxes and self.show_boxes:
+                    cam_w, cam_h = cam_surf.get_size()
+                    src_h, src_w = camera_frame.shape[:2]
+                    for top, right, bottom, left in face_boxes:
+                        # Mirror the x coordinates to match the flipped surface
+                        m_left = cam_w - int(right * cam_w / src_w)
+                        m_right = cam_w - int(left * cam_w / src_w)
+                        s_top = int(top * cam_h / src_h)
+                        s_bottom = int(bottom * cam_h / src_h)
+                        rect = self.pygame.Rect(m_left, s_top, m_right - m_left, s_bottom - s_top)
+                        self.pygame.draw.rect(cam_surf, (255, 255, 255), rect, 2)
                 scaled, x, y = self._fit(cam_surf, panel_w, win_h)
                 self.screen.blit(scaled, (panel_w + x, y))
             else:
@@ -156,6 +168,8 @@ class SingularityRenderer:
                 idx = event.key - self.pygame.K_1
                 if 0 <= idx < len(STYLES):
                     self.style = STYLES[idx]
+                if event.key == self.pygame.K_q:
+                    self.show_boxes = not self.show_boxes
             if event.type == self.pygame.VIDEORESIZE:
                 self.screen = self.pygame.display.set_mode(
                     event.size, self.pygame.RESIZABLE

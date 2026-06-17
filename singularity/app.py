@@ -56,6 +56,7 @@ class App:
         )
         self.tracks = TrackManager()
         self._params_cache: dict[int, VisualParams] = {}
+        self._face_labels: list[tuple[tuple, int]] = []
         self._writer = None
         if config.record_path:
             self._writer = _VideoWriter(config.record_path, config.width, config.height, config.fps)
@@ -99,7 +100,12 @@ class App:
 
                 self._step_render(t)
 
-                self.renderer.present(frame if self.config.side_by_side else None)
+                if self.config.side_by_side:
+                    with self._detect_lock:
+                        boxes = [obs.box for obs in self._latest_observations]
+                    self.renderer.present(frame, boxes)
+                else:
+                    self.renderer.present()
                 if self._writer is not None:
                     self._writer.write(self.renderer.frame_array())
 
@@ -132,16 +138,19 @@ class App:
         with self._detect_lock:
             observations = list(self._latest_observations)
 
+        labels = []
         self.tracks.begin_frame()
         for obs in observations:
             identity_id = self.registry.resolve(obs.embedding)
             self.params_for(identity_id, obs.embedding)
+            labels.append((obs.box, identity_id))
             nx, ny = obs.normalized_center
             if self.config.side_by_side:
                 nx = 1.0 - nx
             pixel_pos = (nx * self.config.width, ny * self.config.height)
             self.tracks.observe(identity_id, pixel_pos)
 
+        self._face_labels = labels
         visible = self.tracks.end_frame()
         self.renderer.begin()
         for track in visible:
