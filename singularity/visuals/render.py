@@ -100,26 +100,33 @@ class SingularityRenderer:
 
         self._draw_core(cx, cy, radius, rotation, params, track.presence)
 
+    def _fit(self, surface, box_w, box_h):
+        src_w, src_h = surface.get_size()
+        scale = min(box_w / src_w, box_h / src_h)
+        fit_w, fit_h = int(src_w * scale), int(src_h * scale)
+        scaled = self.pygame.transform.smoothscale(surface, (fit_w, fit_h))
+        x = (box_w - fit_w) // 2
+        y = (box_h - fit_h) // 2
+        return scaled, x, y
+
     def present(self, camera_frame: np.ndarray | None = None) -> None:
         """Push the canvas to the window (no-op semantics in headless mode)."""
 
         if self.screen is not None:
+            self.screen.fill((0, 0, 0))
             win_w, win_h = self.screen.get_size()
             if self.side_by_side and camera_frame is not None:
                 panel_w = win_w // 2
-                self.screen.blit(
-                    self.pygame.transform.smoothscale(self.canvas, (panel_w, win_h)), (0, 0)
-                )
+                scaled, x, y = self._fit(self.canvas, panel_w, win_h)
+                self.screen.blit(scaled, (x, y))
                 cam_surf = self.pygame.surfarray.make_surface(
                     np.transpose(camera_frame, (1, 0, 2))
                 )
-                self.screen.blit(
-                    self.pygame.transform.smoothscale(cam_surf, (panel_w, win_h)), (panel_w, 0)
-                )
+                scaled, x, y = self._fit(cam_surf, panel_w, win_h)
+                self.screen.blit(scaled, (panel_w + x, y))
             else:
-                self.screen.blit(
-                    self.pygame.transform.smoothscale(self.canvas, (win_w, win_h)), (0, 0)
-                )
+                scaled, x, y = self._fit(self.canvas, win_w, win_h)
+                self.screen.blit(scaled, (x, y))
             self.pygame.display.flip()
 
     def should_quit(self) -> bool:
