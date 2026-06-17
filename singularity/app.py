@@ -136,6 +136,8 @@ class App:
             identity_id = self.registry.resolve(obs.embedding)
             self.params_for(identity_id, obs.embedding)
             nx, ny = obs.normalized_center
+            if self.config.side_by_side:
+                nx = 1.0 - nx
             pixel_pos = (nx * self.config.width, ny * self.config.height)
             self.tracks.observe(identity_id, pixel_pos)
 

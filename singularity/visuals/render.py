@@ -122,6 +122,7 @@ class SingularityRenderer:
                 cam_surf = self.pygame.surfarray.make_surface(
                     np.transpose(camera_frame, (1, 0, 2))
                 )
+                cam_surf = self.pygame.transform.flip(cam_surf, True, False)
                 scaled, x, y = self._fit(cam_surf, panel_w, win_h)
                 self.screen.blit(scaled, (panel_w + x, y))
             else:
