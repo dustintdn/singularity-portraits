@@ -1,5 +1,5 @@
-numpy
+numpy<2
 pygame
-opencv-python-headless
+opencv-python-headless<4.11
 dlib
 face_recognition

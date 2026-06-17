@@ -53,11 +53,43 @@ These two artifacts are committed so you can see what it does at a glance:
 
 ## Setup
 
+### Camera-free / synthetic path (pip, works anywhere)
+
 ```bash
 python -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
 ```
+
+### Live webcam path (conda, recommended on macOS)
+
+`dlib` ships C++ code that fails to compile on modern macOS (missing `fp.h` in
+recent Xcode SDKs). The easiest fix is conda, which provides a prebuilt binary:
+
+```bash
+conda create -n singularity python=3.12 -y
+conda activate singularity
+conda install -c conda-forge dlib -y
+pip install face_recognition pygame "opencv-python-headless<4.11" "numpy<2"
+```
+
+> **numpy < 2 is required.** The conda-forge `dlib` build is linked against
+> numpy 1.x; numpy 2.x changes the array ABI and causes `RuntimeError:
+> Unsupported image type` at detection time.
+
+If you don't have conda, install [miniforge](https://github.com/conda-forge/miniforge)
+(lightweight conda for Apple Silicon / Linux):
+
+```bash
+curl -fsSL -o /tmp/miniforge.sh \
+  https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-$(uname)-$(uname -m).sh
+bash /tmp/miniforge.sh -b -p ~/miniforge3
+eval "$(~/miniforge3/bin/conda shell.$(basename $SHELL) hook)"
+```
+
+On macOS you will also need to grant **camera access** to your terminal app the
+first time you run the webcam source (System Settings > Privacy & Security >
+Camera).
 
 ---
 
@@ -116,8 +148,7 @@ python -m pytest
 
 ## Status
 
-Phase 1 is implemented and validated on the synthetic path (the only path a
-camera-less environment can exercise). The live-webcam path is implemented but
-has not been run here — there is no camera or display in this environment. Phase
+Phase 1 is implemented and validated on both the synthetic path and the live
+webcam path (tested on macOS with Apple Silicon via conda-installed dlib). Phase
 2 (multiple real faces, wide/overhead camera, possibly InsightFace embeddings)
 is architected for but not built; see the tech plan and `decisions.md`.
