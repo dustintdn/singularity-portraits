@@ -36,6 +36,7 @@ class AppConfig:
     max_frames: int | None = None
     record_path: str | None = None  # write an MP4 of the output if set
     side_by_side: bool = False
+    style: str = "classic"
 
 
 class App:
@@ -51,7 +52,7 @@ class App:
 
         self.renderer = SingularityRenderer(
             width=config.width, height=config.height, headless=config.headless,
-            side_by_side=config.side_by_side,
+            side_by_side=config.side_by_side, style=config.style,
         )
         self.tracks = TrackManager()
         self._params_cache: dict[int, VisualParams] = {}
