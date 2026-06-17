@@ -104,13 +104,22 @@ class SingularityRenderer:
         """Push the canvas to the window (no-op semantics in headless mode)."""
 
         if self.screen is not None:
-            self.screen.blit(self.canvas, (0, 0))
+            win_w, win_h = self.screen.get_size()
             if self.side_by_side and camera_frame is not None:
+                panel_w = win_w // 2
+                self.screen.blit(
+                    self.pygame.transform.smoothscale(self.canvas, (panel_w, win_h)), (0, 0)
+                )
                 cam_surf = self.pygame.surfarray.make_surface(
                     np.transpose(camera_frame, (1, 0, 2))
                 )
-                cam_surf = self.pygame.transform.scale(cam_surf, (self.width, self.height))
-                self.screen.blit(cam_surf, (self.width, 0))
+                self.screen.blit(
+                    self.pygame.transform.smoothscale(cam_surf, (panel_w, win_h)), (panel_w, 0)
+                )
+            else:
+                self.screen.blit(
+                    self.pygame.transform.smoothscale(self.canvas, (win_w, win_h)), (0, 0)
+                )
             self.pygame.display.flip()
 
     def should_quit(self) -> bool:
@@ -123,6 +132,10 @@ class SingularityRenderer:
                 return True
             if event.type == self.pygame.KEYDOWN and event.key == self.pygame.K_ESCAPE:
                 return True
+            if event.type == self.pygame.VIDEORESIZE:
+                self.screen = self.pygame.display.set_mode(
+                    event.size, self.pygame.RESIZABLE
+                )
         return False
 
     def frame_array(self) -> np.ndarray:

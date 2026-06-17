@@ -27,7 +27,7 @@ def build_source(args):
     from singularity import sources
 
     if args.source == "webcam":
-        return sources.WebcamSource(index=args.camera, width=args.width, height=args.height)
+        return sources.WebcamSource(index=args.camera, width=1280, height=720)
     if args.source == "video":
         return sources.VideoFileSource(args.video, loop=args.loop)
     if args.source == "images":

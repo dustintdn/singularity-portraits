@@ -12,6 +12,7 @@ loop already handles "for each face in the frame".
 
 from __future__ import annotations
 
+import threading
 import time
 from dataclasses import dataclass
 
@@ -75,13 +76,27 @@ class App:
         start = time.time()
         frame_interval = 1.0 / self.config.fps if self.config.fps else 0.0
         frame_count = 0
+
+        self._detect_lock = threading.Lock()
+        self._latest_observations: list = []
+        self._detect_frame: np.ndarray | None = None
+        self._detect_ready = threading.Event()
+        self._stop_detect = threading.Event()
+        detect_thread = threading.Thread(target=self._detect_loop, daemon=True)
+        detect_thread.start()
+
         try:
             for frame in self.source:
                 if self.renderer.should_quit():
                     break
 
                 t = time.time() - start
-                self._step(frame, t)
+
+                with self._detect_lock:
+                    self._detect_frame = frame
+                self._detect_ready.set()
+
+                self._step_render(t)
 
                 self.renderer.present(frame if self.config.side_by_side else None)
                 if self._writer is not None:
@@ -93,10 +108,29 @@ class App:
                 if frame_interval and not self.config.headless:
                     self._sleep_to_pace(frame_interval)
         finally:
+            self._stop_detect.set()
+            self._detect_ready.set()
+            detect_thread.join(timeout=1.0)
             self._shutdown()
 
-    def _step(self, frame: np.ndarray, t: float) -> None:
-        observations = self.detector.detect(frame)
+    def _detect_loop(self) -> None:
+        while not self._stop_detect.is_set():
+            self._detect_ready.wait()
+            self._detect_ready.clear()
+            if self._stop_detect.is_set():
+                break
+            with self._detect_lock:
+                frame = self._detect_frame
+            if frame is None:
+                continue
+            observations = self.detector.detect(frame)
+            with self._detect_lock:
+                self._latest_observations = observations
+
+    def _step_render(self, t: float) -> None:
+        with self._detect_lock:
+            observations = list(self._latest_observations)
+
         self.tracks.begin_frame()
         for obs in observations:
             identity_id = self.registry.resolve(obs.embedding)
