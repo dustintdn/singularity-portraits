@@ -181,20 +181,6 @@ class SingularityRenderer:
     ) -> tuple[float, float]:
         """Offset the tracked position by the identity's motion archetype."""
 
-        style = params.motion_style
-        amp = params.base_radius * 0.35
-        s = params.drift_speed
-        if style == "orbit":
-            cx += amp * math.cos(t * s)
-            cy += amp * math.sin(t * s)
-        elif style == "jitter":
-            # Deterministic high-frequency wobble (no RNG: stays reproducible).
-            cx += 0.4 * amp * math.sin(t * s * 9.0)
-            cy += 0.4 * amp * math.cos(t * s * 11.0)
-        elif style == "drift":
-            cx += amp * math.sin(t * s * 0.5)
-            cy += 0.5 * amp * math.sin(t * s * 0.37 + 1.3)
-        # "pulse" expresses itself through radius, not position.
         return cx, cy
 
     def _glow(self, color: tuple[int, int, int], radius: float, presence: float):
