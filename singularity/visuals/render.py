@@ -35,6 +35,9 @@ def _import_pygame(headless: bool):
     return pygame
 
 
+STYLES = ("classic", "vortex", "flame")
+
+
 class SingularityRenderer:
     def __init__(
         self,
@@ -44,6 +47,7 @@ class SingularityRenderer:
         trail: float = 0.18,
         background: tuple[int, int, int] = (6, 6, 10),
         side_by_side: bool = False,
+        style: str = "classic",
     ):
         self.width = width
         self.height = height
@@ -51,6 +55,8 @@ class SingularityRenderer:
         self.trail = trail  # 0 = long ghosting trails, 1 = none
         self.background = background
         self.side_by_side = side_by_side
+        self.style = style
+        self.show_boxes = True
 
         self.pygame = _import_pygame(headless)
         self.pygame.init()
@@ -82,6 +88,14 @@ class SingularityRenderer:
     def draw(self, track: Track, params: VisualParams, t: float) -> None:
         """Composite one singularity for ``track`` at time ``t`` (seconds)."""
 
+        if self.style == "vortex":
+            self._draw_vortex(track, params, t)
+        elif self.style == "flame":
+            self._draw_flame(track, params, t)
+        else:
+            self._draw_classic(track, params, t)
+
+    def _draw_classic(self, track: Track, params: VisualParams, t: float) -> None:
         cx = track.position.pos[0]
         cy = track.position.pos[1]
         cx, cy = self._apply_motion(cx, cy, params, t)
@@ -90,7 +104,6 @@ class SingularityRenderer:
         radius = params.base_radius * pulse * (0.4 + 0.6 * track.presence)
         rotation = t * params.rotation_speed
 
-        # Outer glows first (dimmest, largest), core last (brightest, smallest).
         for i, color in enumerate(reversed(params.palette)):
             layer = len(params.palette) - 1 - i
             layer_radius = radius * (1.0 + layer * 0.55)
@@ -109,7 +122,7 @@ class SingularityRenderer:
         y = (box_h - fit_h) // 2
         return scaled, x, y
 
-    def present(self, camera_frame: np.ndarray | None = None) -> None:
+    def present(self, camera_frame: np.ndarray | None = None, face_boxes: list | None = None) -> None:
         """Push the canvas to the window (no-op semantics in headless mode)."""
 
         if self.screen is not None:
@@ -123,6 +136,20 @@ class SingularityRenderer:
                     np.transpose(camera_frame, (1, 0, 2))
                 )
                 cam_surf = self.pygame.transform.flip(cam_surf, True, False)
+                if face_boxes and self.show_boxes:
+                    cam_w, cam_h = cam_surf.get_size()
+                    src_h, src_w = camera_frame.shape[:2]
+                    font = self.pygame.font.SysFont("monospace", max(14, cam_h // 30))
+                    for box, identity_id in face_boxes:
+                        top, right, bottom, left = box
+                        m_left = cam_w - int(right * cam_w / src_w)
+                        m_right = cam_w - int(left * cam_w / src_w)
+                        s_top = int(top * cam_h / src_h)
+                        s_bottom = int(bottom * cam_h / src_h)
+                        rect = self.pygame.Rect(m_left, s_top, m_right - m_left, s_bottom - s_top)
+                        self.pygame.draw.rect(cam_surf, (255, 255, 255), rect, 2)
+                        label = font.render(f"#{identity_id:08X}", True, (255, 255, 255))
+                        cam_surf.blit(label, (m_left, s_top - label.get_height() - 2))
                 scaled, x, y = self._fit(cam_surf, panel_w, win_h)
                 self.screen.blit(scaled, (panel_w + x, y))
             else:
@@ -140,6 +167,12 @@ class SingularityRenderer:
                 return True
             if event.type == self.pygame.KEYDOWN and event.key == self.pygame.K_ESCAPE:
                 return True
+            if event.type == self.pygame.KEYDOWN:
+                idx = event.key - self.pygame.K_1
+                if 0 <= idx < len(STYLES):
+                    self.style = STYLES[idx]
+                if event.key == self.pygame.K_q:
+                    self.show_boxes = not self.show_boxes
             if event.type == self.pygame.VIDEORESIZE:
                 self.screen = self.pygame.display.set_mode(
                     event.size, self.pygame.RESIZABLE
@@ -165,20 +198,6 @@ class SingularityRenderer:
     ) -> tuple[float, float]:
         """Offset the tracked position by the identity's motion archetype."""
 
-        style = params.motion_style
-        amp = params.base_radius * 0.35
-        s = params.drift_speed
-        if style == "orbit":
-            cx += amp * math.cos(t * s)
-            cy += amp * math.sin(t * s)
-        elif style == "jitter":
-            # Deterministic high-frequency wobble (no RNG: stays reproducible).
-            cx += 0.4 * amp * math.sin(t * s * 9.0)
-            cy += 0.4 * amp * math.cos(t * s * 11.0)
-        elif style == "drift":
-            cx += amp * math.sin(t * s * 0.5)
-            cy += 0.5 * amp * math.sin(t * s * 0.37 + 1.3)
-        # "pulse" expresses itself through radius, not position.
         return cx, cy
 
     def _glow(self, color: tuple[int, int, int], radius: float, presence: float):
@@ -241,7 +260,147 @@ class SingularityRenderer:
         if presence >= 1.0:
             self.pygame.draw.polygon(self.canvas, core_color, points)
         else:
-            # Blend the core in via a per-call surface so presence fades it.
+            tmp = self.pygame.Surface((self.width, self.height))
+            tmp.fill((0, 0, 0))
+            self.pygame.draw.polygon(tmp, core_color, points)
+            tmp.set_alpha(int(255 * presence))
+            self.canvas.blit(tmp, (0, 0), special_flags=self.pygame.BLEND_RGB_ADD)
+
+    # -- vortex style ---------------------------------------------------------
+
+    def _draw_vortex(self, track: Track, params: VisualParams, t: float) -> None:
+        cx = track.position.pos[0]
+        cy = track.position.pos[1]
+        cx, cy = self._apply_motion(cx, cy, params, t)
+
+        pulse = 1.0 + params.pulse_depth * 1.5 * math.sin(t * params.pulse_speed * 3.0)
+        radius = params.base_radius * 0.55 * pulse * (0.4 + 0.6 * track.presence)
+        rotation = t * params.rotation_speed * 5.0
+        seed_offset = params.seed % 1000
+
+        self._draw_vortex_tendrils(cx, cy, radius, rotation, params, t, track.presence, seed_offset)
+        self._draw_vortex_particles(cx, cy, radius, rotation, params, t, track.presence, seed_offset)
+        self._draw_vortex_core(cx, cy, radius, rotation, params, t, track.presence, seed_offset)
+
+    def _draw_vortex_tendrils(
+        self, cx, cy, radius, rotation, params, t, presence, seed_offset
+    ):
+        num_arms = 3 + (params.seed % 4)
+        arm_length = radius * 1.5
+        for arm in range(num_arms):
+            base_angle = rotation + (2 * math.pi * arm / num_arms)
+            color = params.palette[arm % len(params.palette)]
+            dim = max(1, int(color[0] * 0.4)), max(1, int(color[1] * 0.4)), max(1, int(color[2] * 0.4))
+            segments = 24
+            points = []
+            for s in range(segments):
+                frac = s / segments
+                curl = 2.5 + params.angularity * 2.0
+                angle = base_angle + frac * curl
+                wobble = math.sin(t * 8.0 + seed_offset + arm * 7.0 + s * 0.5) * radius * 0.15
+                r = radius * 0.3 + frac * arm_length + wobble
+                px = cx + r * math.cos(angle)
+                py = cy + r * math.sin(angle)
+                points.append((px, py))
+            if len(points) > 1:
+                width = max(1, int(3 * presence * (1.0 - 0.5 * (len(points) / segments))))
+                self.pygame.draw.lines(self.canvas, dim, False, points, width)
+
+    def _draw_vortex_particles(
+        self, cx, cy, radius, rotation, params, t, presence, seed_offset
+    ):
+        num_particles = 16 + (params.seed % 12)
+        for i in range(num_particles):
+            phase = seed_offset * 0.1 + i * 2.39996
+            orbit_speed = 3.0 + math.sin(phase * 3.7) * 1.5
+            orbit_r = radius * (0.4 + 1.8 * ((i * 0.618034) % 1.0))
+            jitter = math.sin(t * 12.0 + i * 4.1) * radius * 0.12
+            orbit_r += jitter
+            angle = rotation * orbit_speed + phase + t * (1.5 + (i % 5) * 0.8)
+            px = cx + orbit_r * math.cos(angle)
+            py = cy + orbit_r * math.sin(angle)
+            color = params.palette[i % len(params.palette)]
+            particle_r = max(2, int(radius * 0.08 * (0.5 + 0.5 * math.sin(t * 10.0 + i))))
+            glow = self._glow(color, particle_r * 2, presence)
+            rect = glow.get_rect(center=(int(px), int(py)))
+            self.canvas.blit(glow, rect, special_flags=self.pygame.BLEND_RGB_ADD)
+
+    def _draw_vortex_core(
+        self, cx, cy, radius, rotation, params, t, presence, seed_offset
+    ):
+        for i, color in enumerate(reversed(params.palette)):
+            layer = len(params.palette) - 1 - i
+            layer_radius = radius * (1.0 + layer * 0.5)
+            glow = self._glow(color, layer_radius, presence)
+            rect = glow.get_rect(center=(int(cx), int(cy)))
+            self.canvas.blit(glow, rect, special_flags=self.pygame.BLEND_RGB_ADD)
+
+        n_points = 48
+        core_color = params.palette[0]
+        points = []
+        for i in range(n_points):
+            ang = rotation * 1.5 + 2 * math.pi * i / n_points
+            deform = 1.0
+            for octave in range(1, 6):
+                freq = octave * (1 + params.angularity * 4)
+                deform += (0.3 / octave) * math.sin(
+                    freq * ang + t * (5.0 + octave * 1.5) + seed_offset
+                )
+            r = radius * 0.7 * deform
+            points.append((cx + r * math.cos(ang), cy + r * math.sin(ang)))
+
+        if presence >= 1.0:
+            self.pygame.draw.polygon(self.canvas, core_color, points)
+        else:
+            tmp = self.pygame.Surface((self.width, self.height))
+            tmp.fill((0, 0, 0))
+            self.pygame.draw.polygon(tmp, core_color, points)
+            tmp.set_alpha(int(255 * presence))
+            self.canvas.blit(tmp, (0, 0), special_flags=self.pygame.BLEND_RGB_ADD)
+
+    # -- flame style ----------------------------------------------------------
+
+    def _draw_flame(self, track: Track, params: VisualParams, t: float) -> None:
+        cx = track.position.pos[0]
+        cy = track.position.pos[1]
+        cx, cy = self._apply_motion(cx, cy, params, t)
+
+        pulse = 1.0 + params.pulse_depth * math.sin(t * params.pulse_speed)
+        radius = params.base_radius * pulse * (0.4 + 0.6 * track.presence)
+        rotation = t * params.rotation_speed
+        seed_offset = params.seed % 1000
+
+        # Glow layers with increasing upward offset — outer layers drift higher
+        for i, color in enumerate(reversed(params.palette)):
+            layer = len(params.palette) - 1 - i
+            layer_radius = radius * (1.0 + layer * 0.55)
+            drift = layer * radius * 0.3 + math.sin(t * 2.0 + layer) * radius * 0.08
+            glow = self._glow(color, layer_radius, track.presence)
+            rect = glow.get_rect(center=(int(cx), int(cy - drift)))
+            self.canvas.blit(glow, rect, special_flags=self.pygame.BLEND_RGB_ADD)
+
+        self._draw_flame_core(cx, cy, radius, rotation, params, t, track.presence, seed_offset)
+
+    def _draw_flame_core(self, cx, cy, radius, rotation, params, t, presence, seed_offset):
+        n_points = 36
+        core_color = params.palette[0]
+        points = []
+        for i in range(n_points):
+            ang = rotation + 2 * math.pi * i / n_points
+            deform = 1.0
+            for octave in range(1, params.noise_octaves + 1):
+                deform += (params.noise_amplitude / octave) * math.sin(
+                    octave * (ang * (1 + params.angularity * 3) + params.seed % 7)
+                )
+            upward = max(0.0, -math.sin(ang))
+            stretch = 1.0 + upward * (0.6 + 0.3 * math.sin(t * 4.0 + seed_offset))
+            flicker = 1.0 + upward * 0.2 * math.sin(t * 9.0 + i * 0.8)
+            r = radius * 0.55 * deform * stretch * flicker
+            points.append((cx + r * math.cos(ang), cy + r * math.sin(ang)))
+
+        if presence >= 1.0:
+            self.pygame.draw.polygon(self.canvas, core_color, points)
+        else:
             tmp = self.pygame.Surface((self.width, self.height))
             tmp.fill((0, 0, 0))
             self.pygame.draw.polygon(tmp, core_color, points)
