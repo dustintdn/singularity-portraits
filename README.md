@@ -51,11 +51,17 @@ These two artifacts are committed so you can see what it does at a glance:
 
 ---
 
-## Running it
+## Setup
 
 ```bash
+python -m venv venv
+source venv/bin/activate
 pip install -r requirements.txt
 ```
+
+---
+
+## Running it
 
 **Camera-free demo (works anywhere, no camera or display needed):**
 
@@ -105,25 +111,6 @@ is covered and runs with no camera and no display:
 pip install -r requirements-dev.txt
 python -m pytest
 ```
-
----
-
-## Installing the real face backend
-
-The live-camera path needs `face_recognition`, which builds on **dlib** (needs
-CMake + a C++ compiler) and is the usual install snag.
-
-On modern systems `dlib` / `face-recognition-models` can fail to build against
-recent setuptools (`AttributeError: install_layout`). If that happens, in a
-fresh virtualenv:
-
-```bash
-pip install "setuptools<60" wheel
-pip install dlib face_recognition
-```
-
-or use a conda environment, where dlib ships prebuilt. None of this is needed
-for the synthetic/demo path.
 
 ---
 

@@ -56,6 +56,10 @@ class FaceRecognitionDetector:
         self.upsample = upsample
 
     def detect(self, frame: np.ndarray) -> list[FaceObservation]:
+        if frame.dtype != np.uint8:
+            frame = frame.astype(np.uint8)
+        if not frame.flags["C_CONTIGUOUS"]:
+            frame = np.ascontiguousarray(frame)
         height, width = frame.shape[:2]
         boxes = self._fr.face_locations(
             frame, number_of_times_to_upsample=self.upsample, model=self.model

@@ -1,21 +1,5 @@
-# Core runtime dependencies (Phase 1).
 numpy
 pygame
-
-# OpenCV: the headless wheel avoids GUI/X11 deps and is the right choice on a
-# server. On a real installation machine *with a display* you may prefer the
-# full build instead — pick exactly one:
 opencv-python-headless
-# opencv-python
-
-# Real face-detection backend (the live-webcam path). Commented out because it
-# builds on dlib, which needs CMake + a C++ compiler and is the most common
-# install snag. The synthetic path (`--source synthetic`) needs none of this.
-#
-# Known gotcha on modern systems: `face-recognition-models` / `dlib` can fail to
-# build against recent setuptools ("AttributeError: install_layout"). If so, in a
-# fresh virtualenv run `pip install "setuptools<60" wheel` first, then:
-#     pip install dlib face_recognition
-# or use a conda env where dlib ships prebuilt binaries.
-#
-# face_recognition
+dlib
+face_recognition
