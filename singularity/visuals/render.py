@@ -139,14 +139,17 @@ class SingularityRenderer:
                 if face_boxes and self.show_boxes:
                     cam_w, cam_h = cam_surf.get_size()
                     src_h, src_w = camera_frame.shape[:2]
-                    for top, right, bottom, left in face_boxes:
-                        # Mirror the x coordinates to match the flipped surface
+                    font = self.pygame.font.SysFont("monospace", max(14, cam_h // 30))
+                    for box, identity_id in face_boxes:
+                        top, right, bottom, left = box
                         m_left = cam_w - int(right * cam_w / src_w)
                         m_right = cam_w - int(left * cam_w / src_w)
                         s_top = int(top * cam_h / src_h)
                         s_bottom = int(bottom * cam_h / src_h)
                         rect = self.pygame.Rect(m_left, s_top, m_right - m_left, s_bottom - s_top)
                         self.pygame.draw.rect(cam_surf, (255, 255, 255), rect, 2)
+                        label = font.render(f"#{identity_id:08X}", True, (255, 255, 255))
+                        cam_surf.blit(label, (m_left, s_top - label.get_height() - 2))
                 scaled, x, y = self._fit(cam_surf, panel_w, win_h)
                 self.screen.blit(scaled, (panel_w + x, y))
             else:

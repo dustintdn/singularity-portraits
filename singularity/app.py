@@ -101,9 +101,7 @@ class App:
                 self._step_render(t)
 
                 if self.config.side_by_side:
-                    with self._detect_lock:
-                        boxes = [obs.box for obs in self._latest_observations]
-                    self.renderer.present(frame, boxes)
+                    self.renderer.present(frame, self._face_labels)
                 else:
                     self.renderer.present()
                 if self._writer is not None:

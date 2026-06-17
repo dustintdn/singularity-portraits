@@ -12,6 +12,7 @@ recent noisy frame.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -57,9 +58,9 @@ class IdentityRegistry:
         return self._register(embedding)
 
     def _register(self, embedding: np.ndarray) -> int:
-        new_id = self.next_id
+        digest = hashlib.sha256(np.ascontiguousarray(embedding).tobytes()).hexdigest()
+        new_id = int(digest[:8], 16)
         self.identities.append({"id": new_id, "embedding": embedding, "count": 1})
-        self.next_id += 1
         return new_id
 
     def __len__(self) -> int:
