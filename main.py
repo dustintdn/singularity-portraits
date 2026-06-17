@@ -61,11 +61,12 @@ def parse_args(argv=None):
     p.add_argument("--personas", type=int, default=3, help="Synthetic faces to simulate.")
     p.add_argument("--fr-model", choices=["hog", "cnn"], default="hog", help="Detector model.")
 
-    p.add_argument("--width", type=int, default=1280)
-    p.add_argument("--height", type=int, default=720)
+    p.add_argument("--width", type=int, default=None)
+    p.add_argument("--height", type=int, default=None)
     p.add_argument("--fps", type=float, default=30.0)
     p.add_argument("--threshold", type=float, default=0.6, help="Identity match distance.")
     p.add_argument("--headless", action="store_true", help="Render without a window.")
+    p.add_argument("--side-by-side", action="store_true", help="Show visualizer and camera feed side by side.")
     p.add_argument("--max-frames", type=int, help="Stop after N frames.")
     p.add_argument("--record", help="Write output to this MP4 path.")
     p.add_argument(
@@ -78,6 +79,10 @@ def parse_args(argv=None):
 
 def main(argv=None):
     args = parse_args(argv)
+    if args.width is None:
+        args.width = 640 if args.side_by_side else 1280
+    if args.height is None:
+        args.height = 480 if args.side_by_side else 720
     source = build_source(args)
     detector = build_detector(args)
     config = AppConfig(
@@ -89,6 +94,7 @@ def main(argv=None):
         registry_path=args.registry,
         max_frames=args.max_frames,
         record_path=args.record,
+        side_by_side=args.side_by_side,
     )
     App(source, detector, config).run()
 

@@ -43,20 +43,25 @@ class SingularityRenderer:
         headless: bool = False,
         trail: float = 0.18,
         background: tuple[int, int, int] = (6, 6, 10),
+        side_by_side: bool = False,
     ):
         self.width = width
         self.height = height
         self.headless = headless
         self.trail = trail  # 0 = long ghosting trails, 1 = none
         self.background = background
+        self.side_by_side = side_by_side
 
         self.pygame = _import_pygame(headless)
         self.pygame.init()
+        screen_width = width * 2 if side_by_side else width
         if headless:
             self.canvas = self.pygame.Surface((width, height))
             self.screen = None
         else:
-            self.screen = self.pygame.display.set_mode((width, height))
+            self.screen = self.pygame.display.set_mode(
+                (screen_width, height), self.pygame.RESIZABLE
+            )
             self.pygame.display.set_caption("Singularity Portraits")
             self.canvas = self.pygame.Surface((width, height))
         self.canvas.fill(background)
@@ -95,11 +100,17 @@ class SingularityRenderer:
 
         self._draw_core(cx, cy, radius, rotation, params, track.presence)
 
-    def present(self) -> None:
+    def present(self, camera_frame: np.ndarray | None = None) -> None:
         """Push the canvas to the window (no-op semantics in headless mode)."""
 
         if self.screen is not None:
             self.screen.blit(self.canvas, (0, 0))
+            if self.side_by_side and camera_frame is not None:
+                cam_surf = self.pygame.surfarray.make_surface(
+                    np.transpose(camera_frame, (1, 0, 2))
+                )
+                cam_surf = self.pygame.transform.scale(cam_surf, (self.width, self.height))
+                self.screen.blit(cam_surf, (self.width, 0))
             self.pygame.display.flip()
 
     def should_quit(self) -> bool:

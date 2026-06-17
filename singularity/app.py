@@ -34,6 +34,7 @@ class AppConfig:
     registry_path: str | None = None  # persist biometric data across runs if set
     max_frames: int | None = None
     record_path: str | None = None  # write an MP4 of the output if set
+    side_by_side: bool = False
 
 
 class App:
@@ -48,7 +49,8 @@ class App:
             self.registry = IdentityRegistry(threshold=config.threshold)
 
         self.renderer = SingularityRenderer(
-            width=config.width, height=config.height, headless=config.headless
+            width=config.width, height=config.height, headless=config.headless,
+            side_by_side=config.side_by_side,
         )
         self.tracks = TrackManager()
         self._params_cache: dict[int, VisualParams] = {}
@@ -81,7 +83,7 @@ class App:
                 t = time.time() - start
                 self._step(frame, t)
 
-                self.renderer.present()
+                self.renderer.present(frame if self.config.side_by_side else None)
                 if self._writer is not None:
                     self._writer.write(self.renderer.frame_array())
 
