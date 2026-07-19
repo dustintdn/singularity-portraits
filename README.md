@@ -114,6 +114,12 @@ python main.py --source synthetic --headless --record assets/walkthrough.mp4 \
 python main.py --source webcam            # one face in, one singularity out
 ```
 
+Show webcam + visuals, use hog model:
+
+```bash
+python main.py --source webcam --side-by-side --fr-model hog 
+```
+
 Other sources:
 
 ```bash
