@@ -138,8 +138,8 @@ class App:
 
         labels = []
         self.tracks.begin_frame()
-        for obs in observations:
-            identity_id = self.registry.resolve(obs.embedding)
+        identity_ids = self.registry.resolve_many([obs.embedding for obs in observations])
+        for obs, identity_id in zip(observations, identity_ids):
             self.params_for(identity_id, obs.embedding)
             labels.append((obs.box, identity_id))
             nx, ny = obs.normalized_center

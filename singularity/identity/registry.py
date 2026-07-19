@@ -74,6 +74,50 @@ class IdentityRegistry:
 
         return self._register(embedding)
 
+    def resolve_many(self, embeddings) -> list[int]:
+        """Resolve a whole frame's embeddings at once.
+
+        Equivalent to calling :meth:`resolve` on each embedding in order, but the
+        dominant work — the distance of every face to every known identity — is
+        done as a single ``(F, N)`` matrix op instead of F separate passes.
+
+        Sequential semantics are preserved where they matter: a face that matches
+        no *existing* identity falls back to :meth:`resolve`, so it can still match
+        (and thus dedupe against) a sibling registered earlier in the same frame.
+        Faces that match an existing identity use the batched distances directly.
+        """
+
+        if len(embeddings) == 0:
+            return []
+        embs = np.asarray(embeddings, dtype=np.float64)
+        if embs.ndim == 1:
+            embs = embs[None, :]
+        if not self.identities:
+            return [self.resolve(e) for e in embs]
+
+        # (F, N) Euclidean distances via |a|^2 + |b|^2 - 2 a.b, clamped for the
+        # tiny negatives floating-point can produce on near-identical vectors.
+        snap = self._matrix
+        a2 = np.einsum("fd,fd->f", embs, embs)[:, None]
+        b2 = np.einsum("nd,nd->n", snap, snap)[None, :]
+        dmat = np.sqrt(np.maximum(a2 + b2 - 2.0 * (embs @ snap.T), 0.0))
+
+        ids: list[int] = []
+        for i in range(embs.shape[0]):
+            best_idx = int(np.argmin(dmat[i]))
+            if dmat[i, best_idx] < self.threshold:
+                existing = self.identities[best_idx]
+                r = self.update_rate
+                existing["embedding"] = (1 - r) * existing["embedding"] + r * embs[i]
+                self._matrix[best_idx] = existing["embedding"]
+                existing["count"] += 1
+                ids.append(existing["id"])
+            else:
+                # No match among the frame-start identities; defer to resolve so a
+                # just-registered sibling from this same frame can still match.
+                ids.append(self.resolve(embs[i]))
+        return ids
+
     def _register(self, embedding: np.ndarray) -> int:
         digest = hashlib.sha256(np.ascontiguousarray(embedding).tobytes()).hexdigest()
         new_id = int(digest[:8], 16)

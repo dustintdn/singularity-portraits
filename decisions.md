@@ -163,6 +163,21 @@ truth), and `load()` calls it. `dim` is inferred, not hardcoded to 128, so this 
 already 512-ready for the InsightFace swap (B2). Behaviour is identical to the old
 loop; existing registry tests pass unchanged.
 
+### 15. Batch `resolve_many` for a whole frame, semantics-preserving (A2)
+Tech plan §4.2 **A2**. Added `IdentityRegistry.resolve_many(embeddings)` and switched
+the app's per-frame loop to one call. Distances of all F faces to all N identities
+are computed as a single `(F, N)` matrix (`|a|²+|b|²−2a·b`, clamped for float
+negatives) rather than F separate passes. **Semantics preserved:** a face matching
+an existing identity uses the batched distances directly; a face matching *no*
+frame-start identity falls back to `resolve`, so it can still match/dedupe against a
+sibling registered earlier in the same frame — I added a test for that
+(`test_resolve_many_dedupes_new_siblings_within_a_frame`) and one asserting batch ==
+sequential over several frames. **Honest caveat:** after A1 the raw speed gain here
+is marginal at realistic face counts (F is small); the value is the clean batch API
+that A4 and the InsightFace path build on, not a big perf jump. Verified end-to-end:
+`--source synthetic --personas 6` resolves exactly 6 identities through the batch
+path, exit 0.
+
 ### 14. Fixed a pre-existing stale test (`..._stable_identities_over_time`)
 Not caused by A1 — it fails on clean HEAD too. The test asserted identity ids were
 `{0, 1, 2}`, which matched an *old* sequential-`next_id` scheme; `_register` was

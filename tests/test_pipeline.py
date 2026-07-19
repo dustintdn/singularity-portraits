@@ -91,6 +91,36 @@ def test_distinct_faces_get_distinct_ids():
     assert len(reg) == 2
 
 
+def test_resolve_many_matches_per_face_resolve():
+    # For well-separated faces, batch resolution must agree with sequential resolve,
+    # frame by frame (including running-average updates and re-entry).
+    rng = np.random.default_rng(0)
+    faces = [rng.normal(0, 0.01, 128) + np.eye(128)[k] * 5.0 for k in range(4)]
+
+    seq = IdentityRegistry(threshold=0.6)
+    bat = IdentityRegistry(threshold=0.6)
+    for _ in range(5):  # several frames, all four faces present each time
+        seq_ids = [seq.resolve(f) for f in faces]
+        bat_ids = bat.resolve_many(faces)
+        assert bat_ids == seq_ids
+    assert len(bat) == 4
+
+
+def test_resolve_many_dedupes_new_siblings_within_a_frame():
+    # Two identical brand-new faces in the same frame must collapse to one identity,
+    # matching sequential resolve's behaviour.
+    reg = IdentityRegistry(threshold=0.6)
+    same = np.full(128, 2.0)
+    ids = reg.resolve_many([same, same.copy()])
+    assert ids[0] == ids[1]
+    assert len(reg) == 1
+
+
+def test_resolve_many_empty_returns_empty():
+    reg = IdentityRegistry(threshold=0.6)
+    assert reg.resolve_many([]) == []
+
+
 def test_registry_persistence_roundtrip(tmp_path):
     reg = IdentityRegistry(threshold=0.6)
     a = np.zeros(128)
