@@ -1,0 +1,32 @@
+# Conda environment for the live webcam path (macOS-friendly).
+#
+# Why conda: dlib ships C++ that fails to compile on modern macOS (missing
+# fp.h in recent Xcode SDKs). conda-forge provides a prebuilt dlib binary.
+#
+# Build with:   conda env create -f environment.yml
+# Activate:     conda activate singularity
+# Rebuild:      conda env remove -n singularity && conda env create -f environment.yml
+#
+# The pip pins below are load-bearing, not cosmetic:
+#   numpy<2        conda-forge dlib is linked against numpy 1.x; numpy 2.x
+#                  changes the array ABI -> "RuntimeError: Unsupported image
+#                  type" at detection time.
+#   setuptools<81  face_recognition_models imports the legacy pkg_resources
+#                  module, which setuptools 81+ removed -> "ModuleNotFoundError:
+#                  No module named 'pkg_resources'" even when installed.
+#   face_recognition_models is listed explicitly because face_recognition does
+#                  not always pull it in.
+name: singularity
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12
+  - dlib
+  - pip
+  - pip:
+      - "numpy<2"
+      - "setuptools<81"
+      - "opencv-python-headless<4.11"
+      - pygame
+      - face_recognition
+      - face_recognition_models

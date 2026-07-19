@@ -62,29 +62,20 @@ This is the real thing — a camera plus `face_recognition` (dlib).
 `dlib` ships C++ code that fails to compile on modern macOS (missing `fp.h` in
 recent Xcode SDKs). The easiest fix is conda, which provides a prebuilt binary:
 
-```bash
-conda create -n singularity python=3.12 -y
-conda activate singularity
-conda install -c conda-forge dlib -y
-pip install face_recognition pygame "opencv-python-headless<4.11" "numpy<2"
+Everything is captured in [`environment.yml`](environment.yml), so setup is one
+command:
 
-# Two fixes needed on current setups (see notes below):
-pip install git+https://github.com/ageitgey/face_recognition_models
-pip install "setuptools<81"
+```bash
+conda env create -f environment.yml
+conda activate singularity
 ```
 
-> **numpy < 2 is required.** The conda-forge `dlib` build is linked against
-> numpy 1.x; numpy 2.x changes the array ABI and causes `RuntimeError:
-> Unsupported image type` at detection time.
->
-> **`face_recognition_models` must be installed explicitly.** `face_recognition`
-> declares it as a dependency but does not always pull it in; without it, import
-> fails with `Please install 'face_recognition_models' with this command...`.
->
-> **`setuptools < 81` is required.** `face_recognition_models` imports the legacy
-> `pkg_resources` module, which setuptools 81+ removed. On a newer setuptools the
-> import fails with `ModuleNotFoundError: No module named 'pkg_resources'` — even
-> though the package is installed. Pinning below 81 restores it.
+To rebuild from scratch: `conda env remove -n singularity && conda env create -f environment.yml`.
+
+> The pins in `environment.yml` are load-bearing — `numpy<2` (dlib's ABI),
+> `setuptools<81` (legacy `pkg_resources` that `face_recognition_models` still
+> imports), and an explicit `face_recognition_models`. See the comments in that
+> file for the exact error each one prevents.
 
 If you don't have conda, install [miniforge](https://github.com/conda-forge/miniforge)
 (lightweight conda for Apple Silicon / Linux):
