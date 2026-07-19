@@ -50,8 +50,9 @@ def parse_args(argv=None):
     p.add_argument(
         "--source",
         choices=["webcam", "video", "images", "synthetic"],
-        default="synthetic",
-        help="Where frames come from (default: synthetic, needs no camera).",
+        default="webcam",
+        help="Where frames come from (default: webcam). Use 'synthetic' for a "
+        "camera-free run.",
     )
     p.add_argument("--camera", type=int, default=0, help="Webcam device index.")
     p.add_argument("--video", help="Path to a video file (for --source video).")

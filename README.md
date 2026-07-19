@@ -55,15 +55,9 @@ These two artifacts are committed so you can see what it does at a glance:
 
 ## Setup
 
-### Camera-free / synthetic path (pip, works anywhere)
-
-```bash
-python -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
-```
-
 ### Live webcam path (conda, recommended on macOS)
+
+This is the real thing — a camera plus `face_recognition` (dlib).
 
 `dlib` ships C++ code that fails to compile on modern macOS (missing `fp.h` in
 recent Xcode SDKs). The easiest fix is conda, which provides a prebuilt binary:
@@ -93,31 +87,30 @@ On macOS you will also need to grant **camera access** to your terminal app the
 first time you run the webcam source (System Settings > Privacy & Security >
 Camera).
 
+### Camera-free / synthetic path (pip, works anywhere)
+
+No camera or dlib needed — useful for headless machines, CI, and the test suite.
+
+```bash
+python -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+```
+
 ---
 
 ## Running it
 
-**Camera-free demo (works anywhere, no camera or display needed):**
-
-```bash
-# Render a contact sheet of distinct singularities
-python tools/gallery.py --count 12 --out assets/gallery.png
-
-# Record a moving multi-face walkthrough to MP4
-python main.py --source synthetic --headless --record assets/walkthrough.mp4 \
-    --max-frames 240 --width 960 --height 540
-```
-
 **The real thing (Phase 1 proof of concept — needs a webcam + `face_recognition`):**
 
 ```bash
-python main.py --source webcam            # one face in, one singularity out
+python main.py                            # webcam is the default source
 ```
 
 Show webcam + visuals, use hog model:
 
 ```bash
-python main.py --source webcam --side-by-side --fr-model hog 
+python main.py --side-by-side --fr-model hog
 ```
 
 Other sources:
@@ -128,8 +121,26 @@ python main.py --source images --images-dir ./faces
 ```
 
 Useful flags: `--headless` (no window), `--record out.mp4`, `--max-frames N`,
-`--threshold 0.6` (identity match distance), `--personas 3` (synthetic only),
-`--fr-model {hog,cnn}`. Run `python main.py --help` for the full list.
+`--threshold 0.6` (identity match distance), `--fr-model {hog,cnn}`. Run
+`python main.py --help` for the full list.
+
+<details>
+<summary><strong>Camera-free / synthetic run</strong> (no camera or display needed)</summary>
+
+Handy for headless machines and for regenerating the preview artifacts above:
+
+```bash
+# Render a contact sheet of distinct singularities
+python tools/gallery.py --count 12 --out assets/gallery.png
+
+# Record a moving multi-face walkthrough to MP4
+python main.py --source synthetic --headless --record assets/walkthrough.mp4 \
+    --max-frames 240 --width 960 --height 540
+```
+
+Add `--personas N` to change how many synthetic faces appear.
+
+</details>
 
 ### Persistence & a note on biometric data
 
