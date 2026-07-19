@@ -261,16 +261,18 @@ no downstream changes to registry/seed/render beyond the embedding-dim/threshold
   M3 GPU/Neural Engine and falls back to CPU. SCRFD is single-shot: it finds 1 or 100 faces for ~the same cost,
   and handles small/oblique faces far better than HOG — the main win for a wide/overhead camera.
 - **B2. Embedding dimension change: 128 → 512.** `embedding_dim` becomes 512 (ArcFace). Verify seed derivation
-  (`embedding_to_seed`) is dimension-agnostic (it hashes quantized bytes, so it is) — but note **the same person
-  will get a different seed/singularity under the new model**, because the embedding space changed. Decide
-  whether that's acceptable or whether the visual identity must be preserved across the migration.
+  (`embedding_to_seed`) is dimension-agnostic (it hashes quantized bytes, so it is). The same person gets a
+  *different* singularity under the new model (different embedding space → different seed), but per the §4.4
+  session-scoped decision this is invisible to visitors — the swap happens between sessions, and within a session
+  one model is used consistently. **No seed-preservation work needed.**
 - **B3. Threshold + metric retune.** The `0.6` threshold is a dlib-Euclidean number. ArcFace conventionally uses
   **cosine similarity** on normalized embeddings; either normalize + switch the registry metric to cosine, or
   re-derive an equivalent Euclidean threshold empirically. Must be tuned to avoid merging distinct people (the
   inter-identity separation is *better* with ArcFace, which helps).
-- **B4. Registry file migration.** `IdentityRegistry.save()` writes `version: 1` with 128-d embeddings. A 512-d
-  registry is incompatible — bump the schema version, and decide: reset the registry at migration (simplest,
-  given the seed also changes in B2), or re-enroll. Loading a v1 file under the new model must fail loudly, not silently mismatch.
+- **B4. Registry compatibility guard (migration not required).** Per §4.4 the registry is session-scoped, so
+  there is no long-lived file to migrate — each session starts fresh. The only work here is a **loud-fail guard**:
+  if a persisted registry file is ever loaded whose embedding dimension / model doesn't match the active detector,
+  raise rather than silently mismatch. Bump the schema `version` when the model changes so this check is trivial.
 - **B5. Dependencies + install friction.** Adds `insightface` + `onnxruntime` (and drops the hard `dlib`
   requirement once B is the default). Document the CoreML provider setup; verify at startup which provider is
   actually active and log it (CoreML vs CPU fallback changes the performance story entirely).
@@ -290,12 +292,26 @@ RAM is **not** the constraint — the SCRFD + ArcFace models are well under ~1 G
   the CoreML provider and times SCRFD + batched ArcFace at 1 / 8 / 16 / 32 / 64 faces on the actual M3. Replaces
   all estimates above with measured figures and validates the CoreML provider is engaged.
 
-### 4.4 Conceptual decision to lock before shipping Phase 2
+### 4.4 Persistence horizon — DECIDED: session-scoped
 
-- **Persistence horizon.** Decide explicitly whether the registry resets per session (each showing starts fresh)
-  or persists indefinitely (the installation "remembers" repeat visitors across days/weeks). This is as much a
-  conceptual choice as a technical one given the surveillance themes — and it interacts with the B4 migration
-  (a model swap is a natural reset point). See `decisions.md`.
+**Decision:** the registry remembers people **within a single session only** and **resets between sessions.**
+No long-term / cross-day registry. (This is the lighter surveillance stance and the simpler build.)
+
+Consequences — this decision removes work rather than adding it:
+
+- **Cross-session persistence is not needed.** The existing opt-in JSON `save`/`load` on `IdentityRegistry`
+  ([`registry.py`](singularity/identity/registry.py)) is simply not used in the installation run — start each
+  session with a fresh registry (no `--registry-path`). Persistence code can stay as-is (harmless, dev-only) or
+  be dropped; it is not part of the Phase 2 critical path.
+- **B2 (seed changes under the new model) stops being a visitor-facing problem.** Nobody is remembered across
+  sessions, and the model swap happens *between* sessions, so no returning visitor ever sees their singularity
+  change. Within a session, one model is used consistently → same face, same singularity, always. **Chosen path
+  for B2: accept the reset; do not build seed-preservation.**
+- **B4 (registry migration) collapses to almost nothing.** There is no long-lived registry file to migrate —
+  each session is fresh. Keep only a loud-fail guard so an incompatible/old registry file can never be loaded
+  silently under a different model; no migration path is required.
+- **Ethical framing:** session-scoped memory means the piece recognizes you while you're in the room but forgets
+  you when the session ends. Worth stating plainly in `README.md` / `decisions.md` as the deliberate stance.
 
 ### 4.5 Suggested Phase 2 build order
 
@@ -303,7 +319,7 @@ RAM is **not** the constraint — the SCRFD + ArcFace models are well under ~1 G
 2. **A3** — `--detect-scale` downscaled detection.
 3. **A4** — detection↔track association + skip re-embedding tracked faces (biggest ceiling move; do on dlib first, it carries to InsightFace).
 4. **B6** — benchmark harness (measure before swapping).
-5. **B1–B5** — InsightFace/CoreML backend, dim/threshold retune, registry migration.
+5. **B1–B5** — InsightFace/CoreML backend, dim/threshold retune, registry compatibility guard.
 6. **A5** — optional face cap as a safety valve for live installation.
 
 Track A (1–3) is shippable on the current backend and de-risks Track B by proving the scaling wins independent of the model swap.
