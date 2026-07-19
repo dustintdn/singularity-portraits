@@ -148,10 +148,14 @@ def test_synthetic_detector_stable_identities_over_time():
         ids = {reg.resolve(o.embedding) for o in detector.detect(blank)}
         seen_per_frame.append(ids)
 
-    # Exactly three identities ever appear, and all three are present each frame.
+    # Exactly three identities ever appear, and all three are present every frame.
+    # Ids are hash-derived (not sequential), so assert on the structural property
+    # rather than literal id values: the same three ids recur in every frame.
     assert len(reg) == 3
+    expected_ids = seen_per_frame[0]
+    assert len(expected_ids) == 3
     for ids in seen_per_frame:
-        assert ids == {0, 1, 2}
+        assert ids == expected_ids
 
 
 # -- tracking -----------------------------------------------------------------

@@ -38,6 +38,22 @@ class IdentityRegistry:
         self.update_rate = update_rate
         self.identities: list[dict] = []  # {"id": int, "embedding": np.ndarray, "count": int}
         self.next_id = 0
+        # Distance-search cache: an (N, dim) matrix whose row i mirrors
+        # ``identities[i]["embedding"]``. Kept in sync on register / running-average
+        # update so ``resolve`` is a single vectorised norm instead of a Python loop
+        # over N. ``None`` when empty. Rebuilt wholesale by ``_rebuild_matrix`` (used
+        # after ``load``); mutated incrementally elsewhere.
+        self._matrix: np.ndarray | None = None
+
+    def _rebuild_matrix(self) -> None:
+        """Rebuild ``_matrix`` from ``identities`` (single source of truth)."""
+
+        if self.identities:
+            self._matrix = np.array(
+                [e["embedding"] for e in self.identities], dtype=np.float64
+            )
+        else:
+            self._matrix = None
 
     def resolve(self, embedding: np.ndarray) -> int:
         """Return the identity id for ``embedding``, registering if new."""
@@ -46,12 +62,13 @@ class IdentityRegistry:
         if not self.identities:
             return self._register(embedding)
 
-        distances = [np.linalg.norm(embedding - e["embedding"]) for e in self.identities]
+        distances = np.linalg.norm(self._matrix - embedding, axis=1)
         best_idx = int(np.argmin(distances))
         if distances[best_idx] < self.threshold:
             existing = self.identities[best_idx]
             r = self.update_rate
             existing["embedding"] = (1 - r) * existing["embedding"] + r * embedding
+            self._matrix[best_idx] = existing["embedding"]
             existing["count"] += 1
             return existing["id"]
 
@@ -61,6 +78,8 @@ class IdentityRegistry:
         digest = hashlib.sha256(np.ascontiguousarray(embedding).tobytes()).hexdigest()
         new_id = int(digest[:8], 16)
         self.identities.append({"id": new_id, "embedding": embedding, "count": 1})
+        row = np.asarray(embedding, dtype=np.float64).reshape(1, -1)
+        self._matrix = row if self._matrix is None else np.vstack([self._matrix, row])
         return new_id
 
     def __len__(self) -> int:
@@ -109,4 +128,5 @@ class IdentityRegistry:
         ]
         if registry.identities and registry.next_id <= max(e["id"] for e in registry.identities):
             registry.next_id = max(e["id"] for e in registry.identities) + 1
+        registry._rebuild_matrix()
         return registry

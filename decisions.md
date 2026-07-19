@@ -144,6 +144,36 @@ that succeeded in the PR description.
 
 ---
 
+## Phase 2 implementation (scaling)
+
+*Forward-looking plan lives in tech plan §4; entries here record what landed in code.*
+
+### 13. Registry `resolve` vectorised via a synced `(N, dim)` matrix cache (A1)
+Tech plan §4.2 **A1**. Replaced the per-face Python loop of `np.linalg.norm` calls
+with a single vectorised `np.linalg.norm(matrix - embedding, axis=1)`. To avoid
+rebuilding that matrix every call (which would reintroduce a per-frame O(N) Python
+loop), I keep a persistent `_matrix` cache on the registry, mutated incrementally:
+a row is appended on `_register`, and the matched row is overwritten on the
+running-average update. **Why a cache over rebuild-per-call:** the whole point of
+A1 is to remove the per-frame Python loop over N; a persistent matrix also becomes
+the substrate for A2's batch resolve. **Tradeoff / risk:** the list and the matrix
+can desync if future code mutates `identities` directly — so there's a single
+`_rebuild_matrix()` helper that reconstructs it from `identities` (the source of
+truth), and `load()` calls it. `dim` is inferred, not hardcoded to 128, so this is
+already 512-ready for the InsightFace swap (B2). Behaviour is identical to the old
+loop; existing registry tests pass unchanged.
+
+### 14. Fixed a pre-existing stale test (`..._stable_identities_over_time`)
+Not caused by A1 — it fails on clean HEAD too. The test asserted identity ids were
+`{0, 1, 2}`, which matched an *old* sequential-`next_id` scheme; `_register` was
+since changed to hash-derived ids (`int(sha256(embedding)[:8], 16)`) and the test
+was never updated. I changed it to assert the actual *intent* — exactly three
+identities, and the same three ids present in every frame — without hardcoding id
+values. **Flag:** worth confirming you're happy that ids are hash-derived (stable
+from the embedding) rather than sequential; the test now documents that.
+
+---
+
 ## Open questions I did **not** decide (left for you)
 
 These map to the concept doc's "Open Questions Worth Sitting With" and are
