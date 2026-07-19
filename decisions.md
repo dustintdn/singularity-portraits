@@ -1,8 +1,17 @@
 # Decisions Log
 
-Choices I made autonomously while implementing the tech plan, with enough
-reasoning that you can overrule any of them on review. Grouped roughly by how
-much they'd cost to change later.
+**This log is backward-looking: it records choices *already made in code*.** The
+tech plan (`singularity-portraits-tech-plan.md`) is the forward-looking document —
+what we intend to build and why. Keep them out of each other's lane:
+
+- **Tech plan** → forward: planned work, design intent, open decisions.
+- **This log** → backward: judgment calls made autonomously *at the moment code
+  landed*, with enough reasoning that you can overrule any of them on review.
+- **git history** → what literally changed.
+
+To avoid double-maintenance, forward-looking decisions live *only* in the tech
+plan; entries here **reference** the relevant plan section rather than restating
+it. Entries are grouped roughly by how much they'd cost to change later.
 
 > Context that shaped almost everything below: **this build ran on a headless
 > cloud container with no camera (`/dev/video*` absent) and no display.** So I
@@ -98,6 +107,9 @@ The save path is documented in code as writing biometric data. If you
 want the installation to "remember repeat visitors across days," that's the
 flag — but I left the choice as an explicit, conceptual one for you, per the
 concept doc's open question about consent.
+
+> **Resolved:** persistence horizon is now decided (session-scoped) — see tech
+> plan §4.4. The opt-in save/load described above stays as a dev-only convenience.
 
 ### 9. Synthetic personas are deliberately *well-separated* in vector space
 The `SyntheticDetector`'s fake faces are easy to tell apart on purpose. **Why:**
