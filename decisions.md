@@ -163,6 +163,21 @@ truth), and `load()` calls it. `dim` is inferred, not hardcoded to 128, so this 
 already 512-ready for the InsightFace swap (B2). Behaviour is identical to the old
 loop; existing registry tests pass unchanged.
 
+### 16. `--detect-scale`: downscale for detection, full-res for embeddings (A3)
+Tech plan §4.2 **A3**. Added a `detect_scale` (0,1] to `FaceRecognitionDetector` and
+a `--detect-scale` CLI flag. When < 1.0, `face_locations` runs on a `cv2`-downscaled
+copy (INTER_AREA), and boxes are scaled back up via a pure `_scale_boxes_up` helper.
+**Key decision:** `face_encodings` still runs on the **full-resolution** frame with
+the upscaled boxes — detection (the expensive full-image scan) gets the speedup
+while embedding quality, which drives identity accuracy, stays full-res. Detection
+cost is ~linear in pixels, so 0.5 ≈ ~4x faster `face_locations`. Boxes are clamped to
+frame bounds (a rounded-up edge would otherwise fail `face_encodings`). **Only affects
+the real detector** — `SyntheticDetector` fabricates boxes and ignores it. **Verified:**
+helper math + clamping + range-validation unit-tested; both scale paths execute cleanly
+on-box; synthetic pipeline unaffected. A real-face *accuracy* comparison (does 0.5 miss
+small/distant faces?) is inherently a webcam test on your M3 — recommend eyeballing
+`--source webcam --side-by-side --detect-scale 0.5` before relying on it in the room.
+
 ### 15. Batch `resolve_many` for a whole frame, semantics-preserving (A2)
 Tech plan §4.2 **A2**. Added `IdentityRegistry.resolve_many(embeddings)` and switched
 the app's per-frame loop to one call. Distances of all F faces to all N identities

@@ -42,7 +42,9 @@ def build_detector(args):
 
     if args.source == "synthetic":
         return detector.SyntheticDetector(num_personas=args.personas)
-    return detector.FaceRecognitionDetector(model=args.fr_model)
+    return detector.FaceRecognitionDetector(
+        model=args.fr_model, detect_scale=args.detect_scale
+    )
 
 
 def parse_args(argv=None):
@@ -61,6 +63,14 @@ def parse_args(argv=None):
     p.add_argument("--repeat", type=int, default=1, help="Times to repeat the image folder.")
     p.add_argument("--personas", type=int, default=3, help="Synthetic faces to simulate.")
     p.add_argument("--fr-model", choices=["hog", "cnn"], default="hog", help="Detector model.")
+    p.add_argument(
+        "--detect-scale",
+        type=float,
+        default=1.0,
+        help="Fraction to shrink the frame for detection only, in (0, 1]. "
+        "e.g. 0.5 detects on a half-size frame (~4x faster) then scales boxes "
+        "back up; embeddings stay full-resolution. Default 1.0 (no downscale).",
+    )
 
     p.add_argument("--width", type=int, default=None)
     p.add_argument("--height", type=int, default=None)

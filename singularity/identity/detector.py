@@ -19,6 +19,29 @@ import numpy as np
 from ..types import FaceObservation
 
 
+def _scale_boxes_up(
+    boxes: list[tuple[int, int, int, int]],
+    inv_scale: float,
+    height: int,
+    width: int,
+) -> list[tuple[int, int, int, int]]:
+    """Map ``(top, right, bottom, left)`` boxes found on a downscaled frame back to
+    full-resolution coordinates, clamped to the frame so a rounded-up edge can't
+    fall outside the image (``face_encodings`` requires in-bounds boxes)."""
+
+    scaled: list[tuple[int, int, int, int]] = []
+    for top, right, bottom, left in boxes:
+        scaled.append(
+            (
+                min(height, max(0, round(top * inv_scale))),
+                min(width, max(0, round(right * inv_scale))),
+                min(height, max(0, round(bottom * inv_scale))),
+                min(width, max(0, round(left * inv_scale))),
+            )
+        )
+    return scaled
+
+
 class Detector(Protocol):
     """Anything that can turn a frame into face observations."""
 
@@ -41,7 +64,7 @@ class FaceRecognitionDetector:
 
     embedding_dim = 128
 
-    def __init__(self, model: str = "hog", upsample: int = 1):
+    def __init__(self, model: str = "hog", upsample: int = 1, detect_scale: float = 1.0):
         try:
             import face_recognition  # noqa: F401
         except ImportError as exc:  # pragma: no cover - environment dependent
@@ -51,9 +74,38 @@ class FaceRecognitionDetector:
                 "`pip install face_recognition`, or use SyntheticDetector for a "
                 "camera-free run. See the README for dlib build notes."
             ) from exc
+        if not 0.0 < detect_scale <= 1.0:
+            raise ValueError(f"detect_scale must be in (0, 1], got {detect_scale}")
         self._fr = face_recognition
         self.model = model
         self.upsample = upsample
+        # Fraction to shrink the frame by *for detection only*. Detection cost is
+        # ~linear in pixels, so 0.5 ≈ 4x faster face_locations; boxes are scaled
+        # back up and embeddings are still computed at full resolution (§4.2 A3).
+        self.detect_scale = detect_scale
+
+    def _locate(self, frame: np.ndarray, height: int, width: int):
+        """Find face boxes in full-resolution coordinates, optionally detecting on
+        a downscaled copy of the frame for speed."""
+
+        if self.detect_scale >= 1.0:
+            return self._fr.face_locations(
+                frame, number_of_times_to_upsample=self.upsample, model=self.model
+            )
+        import cv2
+
+        small = cv2.resize(
+            frame,
+            (max(1, round(width * self.detect_scale)), max(1, round(height * self.detect_scale))),
+            interpolation=cv2.INTER_AREA,
+        )
+        small = np.ascontiguousarray(small)
+        boxes_small = self._fr.face_locations(
+            small, number_of_times_to_upsample=self.upsample, model=self.model
+        )
+        if not boxes_small:
+            return []
+        return _scale_boxes_up(boxes_small, 1.0 / self.detect_scale, height, width)
 
     def detect(self, frame: np.ndarray) -> list[FaceObservation]:
         if frame.dtype != np.uint8:
@@ -61,9 +113,7 @@ class FaceRecognitionDetector:
         if not frame.flags["C_CONTIGUOUS"]:
             frame = np.ascontiguousarray(frame)
         height, width = frame.shape[:2]
-        boxes = self._fr.face_locations(
-            frame, number_of_times_to_upsample=self.upsample, model=self.model
-        )
+        boxes = self._locate(frame, height, width)
         if not boxes:
             return []
         encodings = self._fr.face_encodings(frame, boxes)

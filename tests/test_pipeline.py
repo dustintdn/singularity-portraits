@@ -13,7 +13,7 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from singularity.identity.detector import SyntheticDetector
+from singularity.identity.detector import SyntheticDetector, _scale_boxes_up
 from singularity.identity.registry import IdentityRegistry
 from singularity.visuals.seed import (
     embedding_to_seed,
@@ -166,6 +166,37 @@ def test_app_caches_one_stable_singularity_per_identity():
     app.renderer.close()
     assert len(seeds_seen) == 3
     assert len(set(seeds_seen.values())) == 3  # three identities, three distinct forms
+
+
+# -- detection downscale (A3) -------------------------------------------------
+
+
+def test_scale_boxes_up_recovers_full_resolution():
+    # A box found on a half-size frame maps back to ~2x coordinates.
+    boxes = [(50, 200, 150, 100)]  # top, right, bottom, left on the small frame
+    out = _scale_boxes_up(boxes, inv_scale=2.0, height=720, width=1280)
+    assert out == [(100, 400, 300, 200)]
+
+
+def test_scale_boxes_up_clamps_to_frame_bounds():
+    # A box whose scaled edges exceed the frame must clamp, never go out of bounds
+    # (face_encodings requires in-bounds boxes).
+    boxes = [(-5, 700, 400, 10)]
+    out = _scale_boxes_up(boxes, inv_scale=2.0, height=720, width=1280)
+    top, right, bottom, left = out[0]
+    assert top == 0  # clamped up from -10
+    assert right == 1280  # clamped down from 1400
+    assert 0 <= left <= 1280 and 0 <= bottom <= 720
+
+
+def test_detect_scale_out_of_range_rejected():
+    pytest.importorskip("face_recognition")
+    from singularity.identity.detector import FaceRecognitionDetector
+
+    with pytest.raises(ValueError):
+        FaceRecognitionDetector(detect_scale=0.0)
+    with pytest.raises(ValueError):
+        FaceRecognitionDetector(detect_scale=1.5)
 
 
 def test_synthetic_detector_stable_identities_over_time():
