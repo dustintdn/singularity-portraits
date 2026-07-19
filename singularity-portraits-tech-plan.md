@@ -22,7 +22,14 @@ Each stage should be its own module. The render/display stage should know nothin
 
 -----
 
-## 2. Phase 1 Scope (Single Face, Webcam)
+## 2. Phase 1 Scope (Single Face, Webcam) — ✅ IMPLEMENTED
+
+> **Status:** Phase 1 is built and matches this section. The pipeline runs end-to-end
+> (`face_recognition` HOG detector → 128-d embeddings → `IdentityRegistry` → seed/params →
+> Pygame renderer → smoothed tracking), with a camera-free `SyntheticDetector` for headless/CI.
+> The registry persists to JSON across sessions (opt-in via `--registry-path`). The code below
+> is retained as the design record; the live implementation lives in the `singularity/` package
+> (see §5). **Active work is now Phase 2 — see §4.**
 
 ### 2.1 Face detection + embedding
 
@@ -191,43 +198,166 @@ Steps 1-5 are about correctness (does identity work at all); 6-9 are about feel 
 
 -----
 
-## 4. Phase 2 Considerations (multi-face, scaling up)
+## 4. Phase 2 — Scaling Architecture (multi-face, crowd-ready)
 
-Not needed for the first build, but worth architecting Phase 1 with these in mind so it’s not a rewrite:
+**Goal:** go from a handful of near-frontal faces to a room full of them (target hardware:
+**Apple Silicon M3 Pro, 36 GB**), without a rewrite. The Phase 1 stage separation holds — the
+render/tracking layers already generalize to N faces — so Phase 2 is concentrated in two places:
+the **detection/embedding backend** and the **per-frame identity cost**.
 
-- **Multiple simultaneous identities**: the `IdentityRegistry` and seed/params derivation already generalize to N faces with no changes — this was designed in from the start. The main new work is in rendering N singularities at once and giving each its own `SmoothedPosition` tracker, keyed by `identity_id`.
-- **Better camera**: if moving to a wide-angle or overhead camera, re-validate detection accuracy at the new distances/angles — `face_recognition`’s default detector is HOG-based and works best on relatively close, front-facing faces. For wider rooms or more oblique angles, switching the detector to a CNN-based model (`face_recognition` supports this via `model="cnn"`, or move to InsightFace/MediaPipe) will likely be necessary, ideally GPU-accelerated for real-time performance with multiple faces.
-- **Face re-entry across occlusion/crowding**: with multiple people, faces will temporarily occlude each other or leave frame and re-enter. The distance-threshold matching in `IdentityRegistry` already handles re-entry; just confirm the threshold doesn’t cause two different people to merge into one identity (the embedding model’s separation quality matters a lot here — this is the main reason to consider upgrading to ArcFace/InsightFace embeddings for Phase 2, since they have better inter-identity separation than `face_recognition`’s default model).
-- **Performance**: face detection + embedding per frame for N faces gets expensive. Options: run detection on a downscaled frame, run embedding extraction at a lower frequency than rendering (e.g., re-confirm identity every 5-10 frames rather than every frame, while position tracking updates every frame from a lighter-weight detector).
-- **Persistence across sessions/days**: decide explicitly whether the identity registry should reset per session (each “showing” of the piece starts fresh) or persist indefinitely (the installation “remembers” repeat visitors across days/weeks). This is a conceptual decision as much as a technical one, given the surveillance themes — worth deciding deliberately rather than defaulting into it.
+### 4.0 What already generalizes (no work needed)
+
+- **`IdentityRegistry`** resolves N embeddings to N stable ids with no changes — designed in from the start.
+- **`TrackManager`** ([`visuals/tracking.py`](singularity/visuals/tracking.py)) already keeps a `Track` per
+  identity, eases presence in/out, and prunes long-absent tracks. Re-entry across occlusion is handled by
+  the registry's distance-threshold match; multi-face rendering is already a loop over visible tracks.
+- Detection **already runs on its own thread** ([`app.py`](singularity/app.py) `_detect_loop`), decoupled from
+  render. So a heavier detector lowers detection *cadence*, not frame rate — `TrackManager` interpolates between detections.
+
+This means Phase 2 is a **scaling exercise, not new architecture** — exactly as intended.
+
+### 4.1 Correcting the Phase 1 assumption about GPU acceleration
+
+Section 2.1 and the old Phase 2 notes assumed `model="cnn"` (dlib) as the accuracy/scale upgrade.
+**On Apple Silicon this is a dead end:** dlib has no Metal / Neural Engine backend, so `model="cnn"`
+runs on CPU and is *slower* than HOG, not faster (`python -c "import dlib; print(dlib.DLIB_USE_CUDA)"`
+prints `False` on an M3). The real fast path on M3 is **onnxruntime's CoreML execution provider**, which
+offloads to the M3 GPU / Neural Engine — reachable via **InsightFace**, not dlib. This reframes the
+"upgrade to InsightFace" note from *optional accuracy tweak* to *the actual scaling mechanism*.
+
+### 4.2 Two development tracks
+
+Track A is low-risk hardening on the current dlib backend (no new deps, ships value immediately).
+Track B is the backend swap that unlocks crowd scale. They compose — Track A's optimizations apply to Track B too.
+
+#### Track A — Cheap wins on the current backend (no new dependencies)
+
+- **A1. Vectorize registry matching.** `resolve()` ([`registry.py`](singularity/identity/registry.py)) does a
+  Python-level list comprehension of N `np.linalg.norm` calls **per face, per frame**. Store identity
+  embeddings in one `(N, 128)` matrix and compute `np.linalg.norm(matrix - embedding, axis=1)` in a single
+  C-level call. Covered by existing registry tests.
+- **A2. Batch-resolve the frame.** `app.py` `_step_render` loops `registry.resolve()` per observation. Resolve
+  all F observations against the matrix at once (`scipy.spatial.distance.cdist` or a broadcast). Turns F×N Python
+  iterations into one vectorized op.
+- **A3. Downscale before detection.** Add a `--detect-scale` flag; run `face_locations` on a shrunk frame and
+  scale boxes back up. Detection cost is ~linear in pixels, so 0.5× ≈ 4× throughput at negligible cost to
+  real (large) faces.
+- **A4. Skip re-embedding tracked faces.** *(Highest-leverage optimization.)* Today every face is re-embedded
+  every frame. Once a face is an established track, reuse its identity and only run embedding on **new /
+  unmatched detections** (or on a low cadence, e.g. re-confirm every 5–10 frames). This decouples steady-state
+  cost from face count and is the single change that most moves the ceiling — needs a lightweight
+  position/IoU association between detections and existing tracks so a detection can be tied to a track without
+  an embedding.
+- **A5. Optional face cap.** A `--max-faces` guard that keeps the N largest boxes (by area) protects frame rate
+  in an unexpectedly dense crowd. Off by default.
+
+#### Track B — InsightFace + ONNX Runtime (CoreML) backend
+
+Add a new detector class behind the **existing `Detector` protocol** ([`detector.py`](singularity/identity/detector.py)) —
+no downstream changes to registry/seed/render beyond the embedding-dim/threshold retune below.
+
+- **B1. New `InsightFaceDetector`.** Wrap InsightFace's `FaceAnalysis` (SCRFD detector + ArcFace embeddings) on
+  `onnxruntime`, configured with `providers=['CoreMLExecutionProvider', 'CPUExecutionProvider']` so it uses the
+  M3 GPU/Neural Engine and falls back to CPU. SCRFD is single-shot: it finds 1 or 100 faces for ~the same cost,
+  and handles small/oblique faces far better than HOG — the main win for a wide/overhead camera.
+- **B2. Embedding dimension change: 128 → 512.** `embedding_dim` becomes 512 (ArcFace). Verify seed derivation
+  (`embedding_to_seed`) is dimension-agnostic (it hashes quantized bytes, so it is) — but note **the same person
+  will get a different seed/singularity under the new model**, because the embedding space changed. Decide
+  whether that's acceptable or whether the visual identity must be preserved across the migration.
+- **B3. Threshold + metric retune.** The `0.6` threshold is a dlib-Euclidean number. ArcFace conventionally uses
+  **cosine similarity** on normalized embeddings; either normalize + switch the registry metric to cosine, or
+  re-derive an equivalent Euclidean threshold empirically. Must be tuned to avoid merging distinct people (the
+  inter-identity separation is *better* with ArcFace, which helps).
+- **B4. Registry file migration.** `IdentityRegistry.save()` writes `version: 1` with 128-d embeddings. A 512-d
+  registry is incompatible — bump the schema version, and decide: reset the registry at migration (simplest,
+  given the seed also changes in B2), or re-enroll. Loading a v1 file under the new model must fail loudly, not silently mismatch.
+- **B5. Dependencies + install friction.** Adds `insightface` + `onnxruntime` (and drops the hard `dlib`
+  requirement once B is the default). Document the CoreML provider setup; verify at startup which provider is
+  actually active and log it (CoreML vs CPU fallback changes the performance story entirely).
+
+### 4.3 Realistic capacity on M3 Pro / 36 GB
+
+RAM is **not** the constraint — the SCRFD + ArcFace models are well under ~1 GB loaded. The limit is
+**per-frame compute vs. target detection cadence.** Detection (SCRFD) is ~fixed per frame; embedding (ArcFace,
+~one forward pass per face) is what scales linearly. Because detection runs async and `TrackManager` interpolates,
+**8–15 Hz detection is plenty** for the installation. Working estimates (to be replaced by B6 benchmarks):
+
+- **Naive (embed every face every frame):** ~**20–40 simultaneous faces** at a usable cadence.
+- **With A4 (skip re-embedding tracked faces) + batched embeddings:** realistically **50–100 faces**,
+  detection-bound rather than embedding-bound.
+
+- **B6. Benchmark harness.** Before committing to numbers, add a standalone script that loads InsightFace with
+  the CoreML provider and times SCRFD + batched ArcFace at 1 / 8 / 16 / 32 / 64 faces on the actual M3. Replaces
+  all estimates above with measured figures and validates the CoreML provider is engaged.
+
+### 4.4 Conceptual decision to lock before shipping Phase 2
+
+- **Persistence horizon.** Decide explicitly whether the registry resets per session (each showing starts fresh)
+  or persists indefinitely (the installation "remembers" repeat visitors across days/weeks). This is as much a
+  conceptual choice as a technical one given the surveillance themes — and it interacts with the B4 migration
+  (a model swap is a natural reset point). See `decisions.md`.
+
+### 4.5 Suggested Phase 2 build order
+
+1. **A1 + A2** — vectorize/batch registry matching (safe, test-covered, immediate).
+2. **A3** — `--detect-scale` downscaled detection.
+3. **A4** — detection↔track association + skip re-embedding tracked faces (biggest ceiling move; do on dlib first, it carries to InsightFace).
+4. **B6** — benchmark harness (measure before swapping).
+5. **B1–B5** — InsightFace/CoreML backend, dim/threshold retune, registry migration.
+6. **A5** — optional face cap as a safety valve for live installation.
+
+Track A (1–3) is shippable on the current backend and de-risks Track B by proving the scaling wins independent of the model swap.
 
 -----
 
 ## 5. Suggested Repo Structure
 
+Actual current layout (Phase 1 implemented):
+
 ```
 singularity-portraits/
-├── main.py                  # capture loop, orchestrates everything
-├── identity/
-│   ├── detector.py          # face detection + embedding extraction
-│   └── registry.py          # IdentityRegistry class
-├── visuals/
-│   ├── seed.py              # embedding_to_seed, seed_to_visual_params
-│   ├── render.py            # drawing/rendering logic
-│   └── tracking.py          # SmoothedPosition / motion smoothing
+├── main.py                  # CLI entry: arg parsing, builds source/detector/config, runs App
+├── singularity/
+│   ├── app.py               # App: capture loop, async detect thread, orchestrates pipeline
+│   ├── sources.py           # frame sources (webcam / synthetic)
+│   ├── types.py             # FaceObservation, AppConfig, shared dataclasses
+│   ├── identity/
+│   │   ├── detector.py      # Detector protocol; FaceRecognitionDetector, SyntheticDetector
+│   │   │                    #   → Phase 2 B1: add InsightFaceDetector here (same protocol)
+│   │   └── registry.py      # IdentityRegistry (resolve/persist) → Phase 2 A1/A2, B3/B4
+│   └── visuals/
+│       ├── seed.py          # embedding_to_seed, seed_to_visual_params
+│       ├── color.py         # palette / colour helpers
+│       ├── render.py        # renderer (draws N singularities)
+│       └── tracking.py      # Track + TrackManager (per-identity presence/easing)
+├── tests/
 ├── requirements.txt
 └── README.md
 ```
 
 -----
 
-## 6. Dependencies (Phase 1)
+## 6. Dependencies
+
+**Phase 1 (current — see `requirements.txt`):**
 
 ```
-opencv-python
-face_recognition
-numpy
+numpy<2
 pygame
+opencv-python-headless<4.11
+dlib
+face_recognition
 ```
 
 Flag to the user: `face_recognition` requires `dlib`, which needs a C++ compiler and CMake available on the system to build — this is the most likely install friction point. If it fails, `pip install cmake` first, then retry, or fall back to a conda environment where dlib has prebuilt binaries.
+
+**Phase 2 additions (Track B):**
+
+```
+insightface
+onnxruntime           # CoreML execution provider ships in the standard wheel on macOS
+```
+
+Once InsightFace is the default detector, the hard `dlib` / `face_recognition` requirement can be
+dropped (or kept as an optional fallback backend). Verify the CoreML provider is actually active at
+startup — a silent CPU fallback changes the performance characteristics entirely (see §4.2 B5).
