@@ -49,6 +49,10 @@ class Track:
     presence: float = 0.0  # 0 = invisible, 1 = fully present; eased each frame
     seen_this_frame: bool = False
     misses: int = 0
+    # Last-known detection box, so the next detect cycle can associate a new box to
+    # this track by overlap and skip re-embedding it (§4.2 A4). ``None`` until first
+    # observed with a box.
+    box: tuple[int, int, int, int] | None = None
 
 
 @dataclass
@@ -71,7 +75,12 @@ class TrackManager:
         for track in self.tracks.values():
             track.seen_this_frame = False
 
-    def observe(self, identity_id: int, position: tuple[float, float]) -> Track:
+    def observe(
+        self,
+        identity_id: int,
+        position: tuple[float, float],
+        box: tuple[int, int, int, int] | None = None,
+    ) -> Track:
         track = self.tracks.get(identity_id)
         if track is None:
             track = Track(
@@ -82,7 +91,22 @@ class TrackManager:
         track.position.update(position)
         track.seen_this_frame = True
         track.misses = 0
+        if box is not None:
+            track.box = box
         return track
+
+    def active_boxes(self) -> list[tuple[int, tuple[int, int, int, int]]]:
+        """``(identity_id, box)`` for every live track that has a known box.
+
+        Published to the detection stage so it can recognise a returning face by
+        overlap and skip re-embedding it (§4.2 A4).
+        """
+
+        return [
+            (t.identity_id, t.box)
+            for t in self.tracks.values()
+            if t.box is not None
+        ]
 
     def end_frame(self) -> list[Track]:
         """Ease presence, drop long-absent tracks, return what to draw.

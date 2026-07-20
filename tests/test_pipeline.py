@@ -13,6 +13,7 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from singularity.identity.association import associate_boxes_to_tracks, iou
 from singularity.identity.detector import SyntheticDetector, _scale_boxes_up
 from singularity.identity.registry import IdentityRegistry
 from singularity.visuals.seed import (
@@ -197,6 +198,113 @@ def test_detect_scale_out_of_range_rejected():
         FaceRecognitionDetector(detect_scale=0.0)
     with pytest.raises(ValueError):
         FaceRecognitionDetector(detect_scale=1.5)
+
+
+# -- detection<->track association (A4) ---------------------------------------
+
+# Boxes are (top, right, bottom, left).
+_BOX_A = (0, 100, 100, 0)  # 100x100 at the origin
+
+
+def test_iou_identical_and_disjoint():
+    assert iou(_BOX_A, _BOX_A) == 1.0
+    assert iou(_BOX_A, (0, 300, 100, 200)) == 0.0  # far to the right, no overlap
+
+
+def test_iou_partial_overlap():
+    # Shifted 50px right: intersection 50x100=5000, union 20000-5000=15000.
+    shifted = (0, 150, 100, 50)
+    assert iou(_BOX_A, shifted) == pytest.approx(5000 / 15000)
+
+
+def test_associate_matches_by_overlap_and_flags_new_faces():
+    boxes = [
+        (0, 105, 100, 5),  # ~overlaps track 11
+        (0, 305, 100, 205),  # ~overlaps track 22
+        (500, 600, 600, 500),  # overlaps nobody -> new face
+    ]
+    track_boxes = [(11, (0, 100, 100, 0)), (22, (0, 300, 100, 200))]
+    matches, unmatched = associate_boxes_to_tracks(boxes, track_boxes)
+    assert matches == {0: 11, 1: 22}
+    assert unmatched == [2]
+
+
+def test_associate_uses_each_track_at_most_once():
+    # Two boxes both overlap the single track; only the better one may claim it.
+    boxes = [(0, 100, 100, 0), (0, 120, 100, 20)]
+    track_boxes = [(7, (0, 100, 100, 0))]
+    matches, unmatched = associate_boxes_to_tracks(boxes, track_boxes)
+    assert list(matches.values()) == [7]
+    assert len(matches) == 1
+    assert len(unmatched) == 1  # the loser becomes a "new face"
+
+
+def test_associate_no_tracks_means_all_new():
+    boxes = [_BOX_A, (0, 300, 100, 200)]
+    matches, unmatched = associate_boxes_to_tracks(boxes, [])
+    assert matches == {}
+    assert unmatched == [0, 1]
+
+
+def test_associate_empty_boxes():
+    matches, unmatched = associate_boxes_to_tracks([], [(1, _BOX_A)])
+    assert matches == {}
+    assert unmatched == []
+
+
+def test_incremental_path_skips_reembedding_tracked_faces():
+    # The core A4 promise: once a face is tracked, the next detection cycle reuses
+    # its identity and does NOT call embed() again for it.
+    import threading
+
+    from singularity.app import App, AppConfig
+    from singularity.sources import SyntheticSource
+
+    box_a = (0, 100, 100, 0)
+    box_b = (0, 300, 100, 200)
+
+    class FakeIncrementalDetector:
+        embedding_dim = 128
+        incremental = True
+
+        def __init__(self):
+            self.embed_calls: list[list] = []
+            self._emb = {box_a: np.eye(128)[0] * 5.0, box_b: np.eye(128)[1] * 5.0}
+
+        def locate(self, frame):
+            return [box_a, box_b]
+
+        def embed(self, frame, boxes):
+            boxes = list(boxes)
+            self.embed_calls.append(boxes)
+            return [self._emb[b] for b in boxes]
+
+        def detect(self, frame):  # pragma: no cover - not used on the incremental path
+            return []
+
+    det = FakeIncrementalDetector()
+    source = SyntheticSource(width=640, height=360, num_frames=3)
+    app = App(source, det, AppConfig(width=640, height=360, headless=True))
+    app._detect_lock = threading.Lock()
+    app._track_boxes_snapshot = []
+    frame = np.zeros((360, 640, 3), dtype=np.uint8)
+
+    # Cycle 1: nothing tracked yet -> both faces embedded.
+    obs1 = app._detect_incremental(frame, app._track_boxes_snapshot)
+    assert [len(c) for c in det.embed_calls] == [2]
+    app._latest_observations = obs1
+    app._step_render(0.0)
+    assert len(app._track_boxes_snapshot) == 2  # both identities now have boxes
+
+    # Cycle 2: same boxes overlap the two tracks -> embed() gets ZERO boxes.
+    obs2 = app._detect_incremental(frame, app._track_boxes_snapshot)
+    assert det.embed_calls[-1] == []  # nothing re-embedded
+    assert all(o.identity_id is not None for o in obs2)  # identities reused
+    assert all(o.embedding is None for o in obs2)
+    app._latest_observations = obs2
+    app._step_render(0.1)  # must not choke on None embeddings
+
+    app.renderer.close()
 
 
 def test_synthetic_detector_stable_identities_over_time():

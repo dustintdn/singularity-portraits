@@ -22,17 +22,24 @@ class FaceObservation:
     embedding:
         Fixed-length identity vector. 128-d for ``face_recognition``, 512-d for
         InsightFace. The rest of the pipeline never assumes a particular length.
+        May be ``None`` when this observation was matched to an existing track and
+        its embedding deliberately skipped (§4.2 A4) — in that case ``identity_id``
+        is set instead.
     box:
         Bounding box in pixel coordinates as ``(top, right, bottom, left)`` to
         match ``face_recognition``'s convention.
     frame_shape:
         ``(height, width)`` of the frame the box was measured in, so downstream
         stages can normalise positions independently of capture resolution.
+    identity_id:
+        Set only when the detector reused a tracked identity for this box instead
+        of embedding it. ``None`` means "unresolved — resolve the embedding".
     """
 
-    embedding: np.ndarray
+    embedding: np.ndarray | None
     box: tuple[int, int, int, int]
     frame_shape: tuple[int, int]
+    identity_id: int | None = None
 
     @property
     def center(self) -> tuple[float, float]:

@@ -43,12 +43,25 @@ def _scale_boxes_up(
 
 
 class Detector(Protocol):
-    """Anything that can turn a frame into face observations."""
+    """Anything that can turn a frame into face observations.
+
+    Detectors may optionally expose ``locate`` / ``embed`` and set
+    ``incremental = True`` to opt into the skip-re-embedding fast path (§4.2 A4);
+    the app falls back to plain ``detect`` when they don't.
+    """
 
     def detect(self, frame: np.ndarray) -> list[FaceObservation]: ...
 
     @property
     def embedding_dim(self) -> int: ...
+
+
+def _as_uint8_contiguous(frame: np.ndarray) -> np.ndarray:
+    if frame.dtype != np.uint8:
+        frame = frame.astype(np.uint8)
+    if not frame.flags["C_CONTIGUOUS"]:
+        frame = np.ascontiguousarray(frame)
+    return frame
 
 
 class FaceRecognitionDetector:
@@ -63,6 +76,9 @@ class FaceRecognitionDetector:
     """
 
     embedding_dim = 128
+    # Supports the locate/embed split, so the app can skip re-embedding faces that
+    # are already tracked (§4.2 A4).
+    incremental = True
 
     def __init__(self, model: str = "hog", upsample: int = 1, detect_scale: float = 1.0):
         try:
@@ -84,10 +100,16 @@ class FaceRecognitionDetector:
         # back up and embeddings are still computed at full resolution (§4.2 A3).
         self.detect_scale = detect_scale
 
-    def _locate(self, frame: np.ndarray, height: int, width: int):
-        """Find face boxes in full-resolution coordinates, optionally detecting on
-        a downscaled copy of the frame for speed."""
+    def locate(self, frame: np.ndarray) -> list[tuple[int, int, int, int]]:
+        """Find face boxes in full-resolution coordinates (the cheap stage).
 
+        Detects on a downscaled copy when ``detect_scale < 1`` and scales the boxes
+        back up. This is the per-frame work; embedding is separate so already-tracked
+        faces can skip it (§4.2 A4).
+        """
+
+        frame = _as_uint8_contiguous(frame)
+        height, width = frame.shape[:2]
         if self.detect_scale >= 1.0:
             return self._fr.face_locations(
                 frame, number_of_times_to_upsample=self.upsample, model=self.model
@@ -107,23 +129,25 @@ class FaceRecognitionDetector:
             return []
         return _scale_boxes_up(boxes_small, 1.0 / self.detect_scale, height, width)
 
-    def detect(self, frame: np.ndarray) -> list[FaceObservation]:
-        if frame.dtype != np.uint8:
-            frame = frame.astype(np.uint8)
-        if not frame.flags["C_CONTIGUOUS"]:
-            frame = np.ascontiguousarray(frame)
-        height, width = frame.shape[:2]
-        boxes = self._locate(frame, height, width)
+    def embed(self, frame: np.ndarray, boxes) -> list[np.ndarray]:
+        """Compute a full-resolution embedding for each box (the expensive stage)."""
+
         if not boxes:
             return []
-        encodings = self._fr.face_encodings(frame, boxes)
+        frame = _as_uint8_contiguous(frame)
+        encodings = self._fr.face_encodings(frame, list(boxes))
+        return [np.asarray(enc, dtype=np.float64) for enc in encodings]
+
+    def detect(self, frame: np.ndarray) -> list[FaceObservation]:
+        frame = _as_uint8_contiguous(frame)
+        height, width = frame.shape[:2]
+        boxes = self.locate(frame)
+        if not boxes:
+            return []
+        embeddings = self.embed(frame, boxes)
         return [
-            FaceObservation(
-                embedding=np.asarray(enc, dtype=np.float64),
-                box=box,
-                frame_shape=(height, width),
-            )
-            for box, enc in zip(boxes, encodings)
+            FaceObservation(embedding=emb, box=box, frame_shape=(height, width))
+            for box, emb in zip(boxes, embeddings)
         ]
 
 
@@ -141,6 +165,9 @@ class SyntheticDetector:
     """
 
     embedding_dim = 128
+    # Embeddings live in persona state, not frame pixels, so "embed an arbitrary
+    # box" is meaningless here — it always runs the full detect() path.
+    incremental = False
 
     def __init__(self, num_personas: int = 3, dim: int = 128, jitter: float = 0.02, seed: int = 7):
         self.dim = dim

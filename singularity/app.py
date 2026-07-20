@@ -18,8 +18,9 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from .identity.association import associate_boxes_to_tracks
 from .identity.registry import IdentityRegistry
-from .types import VisualParams
+from .types import FaceObservation, VisualParams
 from .visuals.render import SingularityRenderer
 from .visuals.seed import embedding_to_visual_params
 from .visuals.tracking import TrackManager
@@ -81,6 +82,10 @@ class App:
 
         self._detect_lock = threading.Lock()
         self._latest_observations: list = []
+        # Published by the render thread, read by the detect thread: last-known
+        # (identity_id, box) per live track, so detection can skip re-embedding a
+        # face that's already tracked (§4.2 A4).
+        self._track_boxes_snapshot: list = []
         self._detect_frame: np.ndarray | None = None
         self._detect_ready = threading.Event()
         self._stop_detect = threading.Event()
@@ -126,29 +131,84 @@ class App:
                 break
             with self._detect_lock:
                 frame = self._detect_frame
+                track_boxes = list(self._track_boxes_snapshot)
             if frame is None:
                 continue
-            observations = self.detector.detect(frame)
+            if getattr(self.detector, "incremental", False):
+                observations = self._detect_incremental(frame, track_boxes)
+            else:
+                observations = self.detector.detect(frame)
             with self._detect_lock:
                 self._latest_observations = observations
+
+    def _detect_incremental(self, frame, track_boxes) -> list:
+        """Locate faces, reuse identities for boxes that overlap live tracks, and
+        embed only the genuinely new ones (§4.2 A4)."""
+
+        boxes = self.detector.locate(frame)
+        if not boxes:
+            return []
+        height, width = frame.shape[:2]
+        matches, unmatched = associate_boxes_to_tracks(boxes, track_boxes)
+        new_embeddings = self.detector.embed(frame, [boxes[i] for i in unmatched])
+        emb_by_box = dict(zip(unmatched, new_embeddings))
+
+        observations = []
+        for i, box in enumerate(boxes):
+            if i in matches:
+                observations.append(
+                    FaceObservation(
+                        embedding=None,
+                        box=box,
+                        frame_shape=(height, width),
+                        identity_id=matches[i],
+                    )
+                )
+            else:
+                observations.append(
+                    FaceObservation(
+                        embedding=emb_by_box[i],
+                        box=box,
+                        frame_shape=(height, width),
+                    )
+                )
+        return observations
 
     def _step_render(self, t: float) -> None:
         with self._detect_lock:
             observations = list(self._latest_observations)
 
+        # Observations arrive either already tied to a tracked identity (detection
+        # reused it and skipped the embedding) or carrying a fresh embedding to
+        # resolve. Resolve the latter in one batch, preserving order.
+        new_ids = iter(
+            self.registry.resolve_many(
+                [obs.embedding for obs in observations if obs.identity_id is None]
+            )
+        )
+
         labels = []
         self.tracks.begin_frame()
-        identity_ids = self.registry.resolve_many([obs.embedding for obs in observations])
-        for obs, identity_id in zip(observations, identity_ids):
-            self.params_for(identity_id, obs.embedding)
+        for obs in observations:
+            if obs.identity_id is not None:
+                identity_id = obs.identity_id
+            else:
+                identity_id = next(new_ids)
+                # Populate the params cache for genuinely new identities; already
+                # tracked ones were cached when they first appeared.
+                self.params_for(identity_id, obs.embedding)
             labels.append((obs.box, identity_id))
             nx, ny = obs.normalized_center
             if self.config.side_by_side:
                 nx = 1.0 - nx
             pixel_pos = (nx * self.config.width, ny * self.config.height)
-            self.tracks.observe(identity_id, pixel_pos)
+            self.tracks.observe(identity_id, pixel_pos, obs.box)
 
         self._face_labels = labels
+        # Publish where each identity currently is, so the detect thread can match
+        # a returning face by overlap and skip re-embedding it.
+        with self._detect_lock:
+            self._track_boxes_snapshot = self.tracks.active_boxes()
         visible = self.tracks.end_frame()
         self.renderer.begin()
         for track in visible:

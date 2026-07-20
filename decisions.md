@@ -163,6 +163,56 @@ truth), and `load()` calls it. `dim` is inferred, not hardcoded to 128, so this 
 already 512-ready for the InsightFace swap (B2). Behaviour is identical to the old
 loop; existing registry tests pass unchanged.
 
+### 18. Wired the skip-re-embedding fast path (A4.2)
+Tech plan §4.2 **A4**, second half. With the association core (A4.1) in place, wired
+it end-to-end so already-tracked faces are not re-embedded:
+- **Detector `locate`/`embed` split.** `FaceRecognitionDetector` now exposes
+  `locate(frame)→boxes` (cheap, every cycle, honours `detect_scale`) and
+  `embed(frame, boxes)→embeddings` (expensive, called only on new boxes). `detect()`
+  is now `embed∘locate`, so the old full path is unchanged. A class flag
+  `incremental = True` opts it into the fast path; `SyntheticDetector.incremental =
+  False` keeps the full path (its embeddings aren't in the pixels — decision #17).
+- **`FaceObservation`** gains `identity_id` and its `embedding` may be `None`: a
+  matched observation carries the reused identity and no embedding.
+- **Cross-thread snapshot.** The render thread publishes `(identity_id, box)` for
+  live tracks (`TrackManager.active_boxes()`, new `Track.box`) under the existing
+  `_detect_lock`; the detect thread reads it and calls `associate_boxes_to_tracks`,
+  embedding only the unmatched boxes (`App._detect_incremental`).
+- **Render loop** now batches resolution over only the embeddings that lack an
+  identity, reusing `identity_id` for the rest; `params_for` runs only for new
+  identities (matched ones were cached when first seen — the invariant holds because
+  a track can't exist before its identity was resolved+cached).
+
+**Why this shape:** keeps *all* heavy work (locate + selective embed) on the detect
+thread so the render loop never blocks; the render thread only publishes a tiny
+snapshot. Fast-moving faces whose overlap drops below IoU 0.3 gracefully fall back to
+being embedded + re-resolved to the same identity — correctness is preserved, only the
+optimisation lapses. **Verification:** a fake incremental detector proves the promise
+in a test (`test_incremental_path_skips_reembedding_tracked_faces`) — cycle 1 embeds
+both faces, cycle 2 embeds *zero*; 28 tests pass; synthetic pipeline unaffected; real
+detector `locate`/`embed`/`detect` compose on-box. Real multi-face speedup is a webcam
+observation (no camera here), same as decision #12.
+
+### 17. A4 split into sub-steps; started with the pure association core (A4.1)
+Tech plan §4.2 **A4** (skip re-embedding tracked faces) is the biggest and most
+invasive Track-A item, so I'm landing it in sub-checkpoints. **A4.1** is the pure,
+isolated geometry — a new `identity/association.py` with `iou(box_a, box_b)` and
+`associate_boxes_to_tracks(boxes, track_boxes, iou_threshold=0.3)` — plus tests. It
+touches no existing code path (zero regression risk) and is fully unit-tested without
+a camera. **Design decisions baked in here:**
+- **IoU (box overlap) as the "same face as an existing track?" test**, threshold 0.3.
+  Faces are sparse and well-separated frame-to-frame, so overlap is a reliable, cheap
+  proxy for identity continuity between detection cycles.
+- **Greedy association** (descending IoU, each track claimed once) rather than a full
+  optimal-assignment solver — justified by the small, well-separated face counts; the
+  loser of a contested overlap simply falls through as a "new face" to be embedded.
+- **Association is a real-detector optimization.** `SyntheticDetector`'s embeddings
+  live in persona state, not frame pixels, so "embed an arbitrary box" is meaningless
+  for it; the skip-path (A4.2) applies only to the real detector, and synthetic keeps
+  full `detect()`. Hence this core is tested in isolation, with real integration left
+  to the webcam — consistent with decision #12. **A4.2 will wire this in** (locate/embed
+  split, `FaceObservation` carrying identity, cross-thread track-box snapshot).
+
 ### 16. `--detect-scale`: downscale for detection, full-res for embeddings (A3)
 Tech plan §4.2 **A3**. Added a `detect_scale` (0,1] to `FaceRecognitionDetector` and
 a `--detect-scale` CLI flag. When < 1.0, `face_locations` runs on a `cv2`-downscaled
