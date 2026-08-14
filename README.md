@@ -105,7 +105,7 @@ pip install -r requirements.txt
 
 ## Running it
 
-**The real thing (Phase 1 proof of concept — needs a webcam + `face_recognition`):**
+**The real thing (Phase 1 proof of concept — requires a webcam + `face_recognition`):**
 
 ```bash
 python main.py                            # webcam is the default source
